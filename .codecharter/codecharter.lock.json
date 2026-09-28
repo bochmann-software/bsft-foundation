@@ -1,0 +1,1252 @@
+{
+  "lockfileVersion": 1,
+  "engineMinVersion": "1.6.3",
+  "generatedAt": "2026-09-15T10:43:48Z",
+  "portalBaseUrl": "https://codecharter.tools",
+  "profiles": [
+    {
+      "slug": "codeguard/csharp-all",
+      "version": "1.2.0",
+      "source": "platform",
+      "contentHash": "sha256:de62118e01ccd40ce3345536f62ee4f608ee17010ab07d33573105861b78838f",
+      "bundleUrl": "https://codecharter.tools/api/v1/platform/profiles/1.2.0/bundle/codeguard/csharp-all",
+      "rules": [
+        {
+          "slug": "abstract-class-naming",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "abstract-class-public-constructor",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "abstract-class-with-only-private-constructors",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "abstract-without-abstract-members",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "aspnetcore-action-missing-http-verb",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "aspnetcore-action-too-much-logic",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "aspnetcore-controller-apicontroller-attribute",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "aspnetcore-controller-naming",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "aspnetcore-controller-route-attribute",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "aspnetcore-controller-too-many-actions",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "assignment-in-condition",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "async-missing-cancellation-token",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "async-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "async-suffix-wrong-return",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "async-void",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "async-void-method",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "attribute-class-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "attribute-class-without-attribute-usage",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "bad-suffixes-avoid-helper-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "bad-suffixes-avoid-manager-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "bad-suffixes-avoid-processor-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "bad-suffixes-avoid-utils-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "bare-type-parameter-name-in-multi-parameter-method",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "binaryformatter-usage",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "blazor-parameter-property-not-public",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "blocking-task-wait-in-async-method",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "blocking-wait-in-test",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "bool-method-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "bool-property-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "calculate-method-returns-void",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "cancellation-token-no-default",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "cancellation-token-not-last-parameter",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "cast-of-unconstrained-type-parameter",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "class-too-large",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "cognitive-complexity",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "const-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "containskey-followed-by-indexer",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-builder-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-command-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-converter-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-factory-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-formatter-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-handler-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-build-missing-builder-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-convert-missing-converter-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-create-missing-factory-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-execute-missing-action-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-format-missing-formatter-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-handle-missing-handler-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-parse-missing-parser-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-resolve-missing-resolver-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-serialize-missing-serializer-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-has-validate-missing-validator-suffix",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-parser-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-parser-specific-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-provider-readonly",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-redundant-method-name",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-repository-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-resolver-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-serializer-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "contracts-validator-contract",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "convert-method-returns-void",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "count-instead-of-any",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "count-method-returns-non-int",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "create-method-returns-void",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "culture-sensitive-parse-without-format-provider",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "culture-sensitive-string-casing",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "culture-sensitive-string-comparison",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "datetime-direct-usage",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "datetime-tostring-without-format",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "deep-inheritance",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "deep-nesting",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "discarded-exception-creation",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "discarded-lazy-sequence",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "discarded-pure-method-result",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "dispose-missing-suppress-finalize",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "dispose-pattern-missing-protected-dispose",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "duplicate-condition-in-else-if",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "ef-async-call-drops-cancellation-token",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "ef-dbcontext-not-configurable",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "ef-onmodelcreating-missing-base-call",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "ef-raw-sql-from-interpolation",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "ef-savechanges-sync-in-async-method",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "empty-catch-block",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "empty-finalizer",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "empty-if-block",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "empty-interface",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "empty-statement-in-block",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "empty-test-method",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "enum-member-naming",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "environment-exit-outside-entry-point",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "equality-operator-on-type-parameter",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "equals-without-gethashcode",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "event-typed-as-non-void-delegate",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "eventargs-class-naming",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "exception-class-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "exception-missing-standard-constructors",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "explicit-gc-collect",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "explicit-type-instead-of-var",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "exposed-mutable-collection-property",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "exposed-static-mutable-collection-field",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "fact-method-with-parameters",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "field-name-too-long",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "finalizer-without-idisposable",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "find-method-returns-void",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "fire-and-forget-async",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "flag-argument",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "generic-exception-catch",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "get-method-returns-void",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "god-class",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "goto-statement",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "high-afferent-coupling",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "high-complexity",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "high-efferent-coupling",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "hosting-background-service-override-without-base-call",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "hosting-execute-async-ignores-stopping-token",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "hosting-execute-async-shadows-base",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "hosting-iconfiguration-injected-below-composition-root",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "httpclient-created-in-method-body",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "icomparable-without-comparison-operators",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "identical-operands-in-binary-expression",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "iequatable-without-gethashcode-override",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "if-with-constant-condition",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "implements-icloneable",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "inject-interface-not-class",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "interface-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "internal-impl-not-public",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "json-name-attribute-on-non-public-property",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "json-serializer-options-per-call",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "large-enum",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "large-void-method",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "linq-where-followed-by-terminal-operator",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "lock-on-string",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "lock-on-this-or-type",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "log-error-without-exception",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "log-message-not-a-structured-template",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "log-template-uses-positional-placeholder",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "logger-generic-argument-mismatch",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "logic-class-without-interface",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "lost-inner-exception",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "low-maintainability-index",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "magic-number",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "method-name-too-long",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "method-pascal-case",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "method-too-large",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "method-type-parameter-naming",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "middleware-invoke-missing-httpcontext-parameter",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "middleware-missing-invoke-async",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "missing-guard-clause",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "missing-inheritdoc",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "missing-inheritdoc-on-interface-implementation",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "missing-param-doc",
+          "version": "1.3.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "missing-xml-doc",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "monitor-enter-without-finally",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "mutable-static-field",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "mutable-struct",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "mutually-dependent-types",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "namespace-distance",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "nested-lock-on-different-targets",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "new-in-constructor",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "no-abstract-in-hierarchy",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "no-ref-out-params",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "no-tuple-public-api",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "non-async-method-with-async-suffix",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "non-public-unsealed-class",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "non-readonly-lock-target",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "null-equality-check",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "operator-overload-without-named-alternative",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "parameter-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "parse-method-returns-void",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "primitive-in-constructor",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "private-field-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "property-pascal-case",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "protected-mutable-field",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "public-api-returns-mutable-collection",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "public-field",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "public-nested-type",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "random-instance-created-in-method-body",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "record-input-naming",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "record-no-public-methods",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "record-output-naming",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "record-with-mutable-collection-member",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "redundant-boolean-literal-comparison",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "redundant-cast",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "redundant-catch-rethrow",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "redundant-conditional-boolean",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "redundant-string-format",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "redundant-tostring-in-interpolation",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "redundant-tostring-on-string",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "regex-literal-pattern-created-in-method-body",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "required-attribute-on-non-nullable-value-type",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "response-for-class",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "rethrow-loses-stack-trace",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "sealed-with-protected",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "security-deprecated-tls",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "security-disabled-cert-validation",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "security-sql-injection",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "security-weak-hashing",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "self-assignment",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "self-recursive-expression-bodied-method",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "self-recursive-property-accessor",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "semaphore-wait-without-finally",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "service-provider-injected-into-service",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "skipped-test",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "static-class-non-extension",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "static-class-too-large",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "static-readonly-naming",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "string-concat-in-loop",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "string-concatenation",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "stringlength-attribute-on-non-string-property",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "struct-with-explicit-parameterless-constructor",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "sync-over-async",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "task-delay-without-cancellation-token",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "task-factory-startnew-without-long-running",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "task-method-returns-null",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "test-attribute-in-production-project",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "test-class-not-public",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "test-method-not-public",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "thread-sleep-in-async-method",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "throw-generic-exception",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "throw-in-finally",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "throw-not-implemented",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "throw-reserved-exception-type",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "todo-comment",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "too-many-ctor-params",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "too-many-interfaces",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "too-many-locals",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "too-many-method-type-parameters",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "too-many-overloads",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "too-many-params",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "too-many-public-methods",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "too-many-type-parameters-on-type",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "try-method-returns-bool",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "type-name-length",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "type-name-lowercase",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "typed-equals-without-object-equals-override",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "unstable-coupled-type",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "unused-catch-exception-variable",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "unused-local-variable",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "unused-method-type-parameter",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "unused-parameter",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "unused-using",
+          "version": "1.2.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "value-type-equals-override-without-equality-operator",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "virtual-call-in-constructor",
+          "version": "1.0.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "weighted-methods-per-class",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "wide-hierarchy",
+          "version": "1.1.0",
+          "contentHash": ""
+        },
+        {
+          "slug": "write-only-property",
+          "version": "1.0.0",
+          "contentHash": ""
+        }
+      ]
+    }
+  ]
+}

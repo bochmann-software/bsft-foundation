@@ -1,0 +1,9 @@
+@name "Options instance registered as a service"
+@severity error
+@category "Design"
+@description "An options object registered as a singleton bypasses the options pattern: it is never bound from configuration, never validated on start, and never reloaded."
+@recommendation "Register with services.AddOptions<TOptions>().Configure(...).ValidateOnStart() and take IOptions<TOptions> (or IOptionsMonitor<TOptions>) at every consumer. See docs/package-conventions.md section 4, row 'Options'."
+
+Methods.Where(m => m.Syntax.Descendants.InvocationExpression.Any(i =>
+  i.Text.Matches("(TryAdd|Add)Singleton\s*<\s*[A-Za-z0-9_.]*Options\s*>") ||
+  i.Text.Matches("(TryAdd|Add)Singleton\s*\(\s*[A-Za-z0-9_]*[Oo]ptions\s*\)")))

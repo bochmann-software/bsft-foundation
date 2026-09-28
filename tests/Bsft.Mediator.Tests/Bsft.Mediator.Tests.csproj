@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bsft.Mediator\Bsft.Mediator.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Core\Bsft.Core.csproj" />
+    <!--
+      The Foundation behavior packages of the canonical default chain. AddBsftMediator(m =>
+      m.UseDefaults()) discovers a behavior by name and skips the ones whose package is absent, so
+      pinning the order needs the packages present exactly as they are in a host that references
+      them. The framework-tier ones (Bsft.Auth.Mediator, Bsft.Organization.Mediator,
+      Bsft.Auditing.Mediator) are deliberately absent: a Foundation test project references no
+      framework package, and the full chain is pinned in Bsft.Mediator.Scenarios.Tests. Coverage
+      stays on Bsft.Mediator (Directory.Build.targets derives the collected module from the project
+      name) and is complete from this project alone.
+    -->
+    <ProjectReference Include="..\..\src\Bsft.Caching.Mediator\Bsft.Caching.Mediator.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Resilience.Mediator\Bsft.Resilience.Mediator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+  </ItemGroup>
+</Project>

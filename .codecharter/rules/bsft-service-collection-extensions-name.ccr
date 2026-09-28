@@ -1,0 +1,10 @@
+@name "Service-collection entry point not named after its feature"
+@severity error
+@category "Naming"
+@description "The DI entry point is <Feature>ServiceCollectionExtensions. A bare ServiceCollectionExtensions says nothing about what it registers and collides with every other package of that name in a host's using list."
+@recommendation "Rename the class to <Feature>ServiceCollectionExtensions, after the feature its AddBsft* methods register. See docs/package-conventions.md section 4, row 'DI entry point'."
+
+from t in Types
+where t.Kind == "Class" && t.IsStatic
+where t.Name == "ServiceCollectionExtensions"
+select t

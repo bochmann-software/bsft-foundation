@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework correlation ID tracking for ASP.NET Core</Description>
+  </PropertyGroup>
+
+  <!-- Bsft.Correlation.Http rather than a handler of its own: the outbound half is a client-safe
+       package, and referencing it here is what keeps AddBsftCorrelation() registering the handler
+       so a host that has both halves calls one method. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Correlation.Abstractions\Bsft.Correlation.Abstractions.csproj" />
+    <ProjectReference Include="..\Bsft.Correlation.Http\Bsft.Correlation.Http.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

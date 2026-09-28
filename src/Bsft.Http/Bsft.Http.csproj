@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework HTTP primitives: strong entity tags from a content digest or a concurrency token, canonical content hashing, conditional-GET (If-None-Match / 304) handling and the strong If-Match comparison conditional writes are gated on</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Http.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework hosting defaults, health checks, and startup validation</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Hosting.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
+    <ProjectReference Include="..\Bsft.Correlation\Bsft.Correlation.csproj" />
+    <!-- The dependency-free query contracts (the filter AST, the paged request). Deliberately the
+         Contracts package and not Bsft.Data: the filter transport only parses the AST, it never
+         compiles it, so Bsft.Hosting stays free of the EF Core dependency Bsft.Data would drag in. -->
+    <ProjectReference Include="..\Bsft.Data.Contracts\Bsft.Data.Contracts.csproj" />
+    <ProjectReference Include="..\Bsft.Logging\Bsft.Logging.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+    <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" />
+  </ItemGroup>
+</Project>

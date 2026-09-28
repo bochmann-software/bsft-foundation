@@ -1,0 +1,12 @@
+@name "Handler without a handler contract"
+@severity error
+@category "Architecture"
+@description "A class named *Handler must implement an I*Handler interface or derive from a handler base such as AuthenticationHandler<>, AuthorizationHandler<> or DelegatingHandler. A type that ends in Handler and answers to nothing is a service with a misleading name."
+@recommendation "Implement the contract the name promises, derive from the framework base you meant, or rename the class. See docs/package-conventions.md section 4, 'Mediator messages and handlers'."
+
+from t in Types
+where t.Kind == "Class" && !t.IsAbstract && !t.IsStatic && t.Name.EndsWith("Handler")
+where !t.ImplementedInterfaces.Any(i => i.Name.StartsWith("I") && i.Name.EndsWith("Handler"))
+where t.DeclaredBaseTypeName == null || !t.DeclaredBaseTypeName.Contains("Handler")
+where t.BaseType == null || !t.BaseType.ImplementedInterfaces.Any(i => i.Name.StartsWith("I") && i.Name.EndsWith("Handler"))
+select t

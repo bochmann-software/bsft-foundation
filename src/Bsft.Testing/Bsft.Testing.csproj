@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework test harnesses and test doubles for integration, mediator, and saga tests</Description>
+    <!-- Test doubles replace production registrations wholesale. Marking the package a development
+         dependency keeps it from flowing transitively into anything a consumer later publishes. -->
+    <DevelopmentDependency>true</DevelopmentDependency>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Correlation\Bsft.Correlation.csproj" />
+    <ProjectReference Include="..\Bsft.Data\Bsft.Data.csproj" />
+    <ProjectReference Include="..\Bsft.EventAggregator.Saga\Bsft.EventAggregator.Saga.csproj" />
+    <ProjectReference Include="..\Bsft.Mediator\Bsft.Mediator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <!-- The fake OIDC authority signs its tokens itself; taken directly, on the version the rest of
+         the IdentityModel stack is pinned to, since no Bsft reference brings it any more. -->
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" />
+  </ItemGroup>
+</Project>

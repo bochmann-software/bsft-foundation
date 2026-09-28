@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework CQRS mediator contracts: ICommand, IQuery, INotification, their handlers, IMediator, IPipelineBehavior and related abstractions.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework EF Core transactional outbox: integration events are stored in the same transaction as the state change and delivered by a leased background dispatcher.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Messaging.EFCore.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
+    <ProjectReference Include="..\Bsft.Messaging\Bsft.Messaging.csproj" />
+    <ProjectReference Include="..\Bsft.Outbox.EFCore\Bsft.Outbox.EFCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+</Project>

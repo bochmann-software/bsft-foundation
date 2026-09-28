@@ -1,0 +1,126 @@
+name: Mutation weekly
+
+# Mutation testing over the whole solution: coverage says a line ran, mutation testing says a change
+# to that line fails a test. It blocks nothing; the survivors land in the job summary.
+#
+# One matrix cell per package family, one Stryker process per project inside a cell: a single process
+# over a solution runs out of memory long before it tests a mutant, and one project alone was
+# measured at close to 5 GB peak across Stryker and its test hosts. GitHub-hosted runners only; this
+# repository is public.
+on:
+  schedule:
+    - cron: '0 6 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      families: ${{ steps.plan.outputs.families }}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-node@v5
+      with:
+        node-version: '24'
+    - name: Derive the matrix
+      id: plan
+      run: |
+        node .github/mutation-families.mjs > mutation-plan.json
+        cat mutation-plan.json
+        node -e '
+          const plan = JSON.parse(require("node:fs").readFileSync("mutation-plan.json", "utf8"));
+          require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `families=${JSON.stringify(plan.families)}\n`);
+        '
+    - uses: actions/upload-artifact@v4
+      with:
+        name: mutation-plan
+        path: mutation-plan.json
+        retention-days: 1
+
+  mutate:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        family: ${{ fromJSON(needs.plan.outputs.families) }}
+    steps:
+    - uses: actions/checkout@v5
+    # The packages target net8.0 and net10.0; stryker-config.json mutates against net8.0 (a mutant is
+    # a change to the source, the same on either framework), and dotnet-stryker 5 itself runs on
+    # net10.0 and does not roll forward.
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+    - uses: actions/setup-node@v5
+      with:
+        node-version: '24'
+    - name: Restore the Stryker tool
+      run: dotnet tool restore
+    # A hosted runner has four cores; bounding the test runners keeps vstest inside Stryker's
+    # connection window.
+    - name: Mutation test the family
+      run: node .github/mutation-family-run.mjs --family "${{ matrix.family }}" --out "results/${{ matrix.family }}" --concurrency 4
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mutation-results-${{ matrix.family }}
+        path: results/${{ matrix.family }}
+        if-no-files-found: ignore
+        retention-days: 7
+
+  report:
+    needs: [plan, mutate]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-node@v5
+      with:
+        node-version: '24'
+    - uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    - name: Merge the per-family results
+      run: >
+        node .github/mutation-aggregate.mjs
+        --input artifacts
+        --expected artifacts/mutation-plan/mutation-plan.json
+        --out-report StrykerOutput/merged/reports/mutation-report.json
+        --out-accounting mutation-accounting.md
+    - name: Collect surviving mutants
+      id: report
+      run: >
+        node .github/mutation-report.mjs
+        --mode nightly
+        --expected artifacts/mutation-plan/mutation-plan.json
+        --body-file mutation-survivors.md
+        --justifications .github/mutation-justifications.json
+    - name: Publish the report
+      if: always()
+      run: |
+        cat mutation-accounting.md >> "$GITHUB_STEP_SUMMARY" || true
+    # An incomplete run is red: a shorter survivor list for the wrong reason must not look like progress.
+    - name: Fail an incomplete run
+      if: steps.report.outputs.complete != 'true'
+      run: |
+        echo "The mutation run did not cover every family; see the accounting in the summary." >&2
+        exit 1
+    - name: Fail a run carrying a justification that no longer holds
+      if: steps.report.outputs.broken-justifications != '0'
+      run: |
+        echo "A survivor justification no longer matches a surviving mutant; see the summary." >&2
+        exit 1

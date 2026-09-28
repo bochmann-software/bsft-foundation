@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bsft.Data\Bsft.Data.csproj" />
+    <!-- The cache-scope guard matches the two caching types by name, because Bsft.Data must not
+         reference Bsft.Caching. The test references both so that a rename on the caching side fails
+         here rather than turning the guard into a check that can never fire. -->
+    <ProjectReference Include="..\..\src\Bsft.Caching.Data\Bsft.Caching.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <!-- The tenant filter has to hold on a relational provider too: that is where EF Core caches SQL
+         and its parameters, which is where the filter used to keep the first scope's tenant. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,7 @@
+root = true
+
+# ADR-0013 D3: the namespace of a file is its project's root namespace plus its folder.
+# Directory.Build.props turns on EnforceCodeStyleInBuild, so a mismatch fails the build.
+[*.cs]
+dotnet_style_namespace_match_folder = true
+dotnet_diagnostic.IDE0130.severity = warning

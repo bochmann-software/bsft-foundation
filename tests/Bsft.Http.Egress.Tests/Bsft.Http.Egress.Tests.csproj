@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The package under test and nothing else. No FrameworkReference on Microsoft.AspNetCore.App: this
+       suite exercises the guard the way the dependency-light client it exists for does, so an edge that
+       would make the package unusable there fails here. -->
+  <ItemGroup>
+    <Compile Include="..\Shared\DependencyClosure.cs" Link="Shared\DependencyClosure.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bsft.Http.Egress\Bsft.Http.Egress.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+</Project>

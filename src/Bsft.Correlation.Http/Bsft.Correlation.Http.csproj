@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework outbound correlation propagation: the HttpClient delegating handler that attaches the X-Correlation-Id header. Pure .NET with no ASP.NET Core dependency, so a Blazor WebAssembly or console client can propagate a correlation ID without pulling the server stack into its bundle.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Correlation.Abstractions\Bsft.Correlation.Abstractions.csproj" />
+  </ItemGroup>
+
+  <!-- Microsoft.Extensions.DependencyInjection.Abstractions and nothing else: it is what the DI entry
+       point needs, and the package conventions put it on the client-safe list for exactly this reason.
+       No FrameworkReference on Microsoft.AspNetCore.App - the handler is the half of correlation a
+       client runs, and a test pins this closure so the server stack cannot creep back in through it. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>

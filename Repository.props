@@ -1,0 +1,29 @@
+<Project>
+  <!-- The values that differ per repository. Directory.Build.props imports this file; everything
+       else about the build is shared with the repository this one is exported from. There is no
+       BsftVersion here: every package in this repository is versioned by BsftFoundationVersion,
+       which Directory.Build.props declares. -->
+  <PropertyGroup>
+    <RepositoryUrl>https://github.com/bochmann-software/bsft-foundation</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/bochmann-software/bsft-foundation</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+
+    <!-- Source Link: the repository URL and commit go into the package, the pdb points at the
+         sources on GitHub, and generated files are embedded in the pdb. -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- Every package is checked on pack against its own target frameworks and, once a baseline
+         version is set, against the API of its previous release. -->
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+
+  <!-- Normalised source paths in the pdb on the build machine only; locally a debugger wants the
+       real ones. -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+</Project>

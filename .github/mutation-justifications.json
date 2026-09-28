@@ -1,0 +1,88 @@
+{
+  "$comment": "Survivors that are justified rather than owed a test. Every entry is a claim about the range of,values, never about the test suite: the test to write it is not, and the code to delete it is not,either. Everything else belongs in neither this file nor an ignore list.,,Each entry declares one of two kinds, and there is no default, because the two invert each other.,,  equivalent   No possible value tells the mutant from the code it replaced. The two are the same,               program. The code it touches is then fair game: an expression whose mutant nothing,               can distinguish is a candidate for simplification or removal.,,  unobservable The mutant behaves differently, often dramatically, and no test can assert on the,               difference because of what the difference is: undefined behaviour, a read past the,               end of something, a race, an effect with no return value to read back. Here the,               check the mutant removes is the defence line, load-bearing precisely because nothing,               downstream would notice its absence. It is the last thing to delete.,,An equivalence label is proved, not argued. Strike the code the entry names, force a rebuild and run,the whole suite, not the covering subset a mutation run would pick. Green corroborates the label; red,refutes it. A third outcome exists and is evidence of its own: the strike may fail to compile, which,says the expression is load-bearing for the compiler rather than for behaviour, and such an entry is,still equivalent but must not read as an invitation to delete. Pick the strike honestly, too. Where,the literal replacement only trips a style diagnostic, strike the statement the claim is really about.,,Proving it green does not license removing it. A line can be equivalent and still earn its place by,cost, and an entry whose code is worth keeping says so.,,Reading the second kind as the first is how a memory guard gets tidied away a year later by,somebody working through this list in good faith. Hence two names and two texts, not one.,,The key is file, member, mutator, the mutated span's own source text and the text that replaced it,,with whitespace inside both collapsed. It is chosen so a justification survives an unrelated change,in the same file and breaks the moment the expression it is about changes. The replacement is part of,the key because one mutator makes several mutants out of one span: an equality operator yields both,the loosened and the reversed form of a comparison, and those can land on opposite sides, one killed,by a boundary test and the other beyond any value a test can produce. Without it an entry is refuted,by the mutant it was never about. An entry that matches no mutant in a run, or,matches one a test killed, fails that run, whichever kind it declares. That is the point: a,justification nobody checks is a claim about code that may no longer exist.,,The list is meant to stay short. A whole shape of mutant appearing here over and over is a question,about the tool rather than about any one expression. An entry may also carry \"line\", and needs it when the span it names is written on more than one line of the same member, so that the key alone matches mutants in several places. The report refuses such an entry by name rather than picking one, and the line resolves it. The line is not part of the key and never matches on its own; it only narrows the candidates, and if the code moves it stops matching, which is the safe direction.\n\nA line does not resolve everything. One mutator can make several mutants out of one span on one line, and those are identical in the key, identical on the line, and identical to a reader: no sentence is true of one and false of another. An entry then covers all of them, which is one claim about one span, and the report says so where it lists the entry. The exception is the case the whole check exists for: if a test killed any of them, the entry is refused outright, because it cannot be about all of them and nothing lets it pick one.",
+  "justifications": [
+    {
+      "file": "src/Bsft.Mediator/StartupValidation/PipelineBehaviorRegistrations.cs",
+      "member": "IsRegistrationOf",
+      "kind": "equivalent",
+      "mutator": "Null coalescing mutation (left to right)",
+      "original": "descriptor.ImplementationType ?? descriptor.ImplementationInstance?.GetType()",
+      "mutated": "descriptor.ImplementationInstance?.GetType()?? descriptor.ImplementationType",
+      "because": "A ServiceDescriptor carries exactly one of implementation type, instance or factory, so at most one operand is non-null and the order of the fallback cannot change the result; a keyed descriptor throws on either property in both orders. Struck to prove it on the local proof branch proof/core-equivalents (c6e5995d, strike commit 335a082d plus null-forgiving operators on the two struck resolver calls so the && strike compiles as the mutant did, on main b28d0f5c): forced rebuild with 0 warnings, the 42 test projects that depend on Bsft.Mediator green at 7327/7327."
+    },
+    {
+      "file": "src/Bsft.Mediator/LoggingBehavior.cs",
+      "member": "HandleAsync",
+      "kind": "unobservable",
+      "mutator": "Statement mutation",
+      "original": "stopwatch.Stop();",
+      "mutated": ";",
+      "because": "ElapsedMilliseconds is read in the log call on the very next statement, so a running stopwatch differs only by the sub-millisecond gap between the two statements, which no caller can observe without a real-time race. The line is needed because the failure-path Stop at line 59 has the same key. It is argued, not struck.",
+      "line": 46
+    },
+    {
+      "file": "src/Bsft.Mediator/LoggingBehavior.cs",
+      "member": "HandleAsync",
+      "kind": "unobservable",
+      "mutator": "Statement mutation",
+      "original": "stopwatch.Stop();",
+      "mutated": ";",
+      "because": "As on the success path at line 47, the elapsed time is read by the next statement, so a running stopwatch differs only by a sub-millisecond gap. The line is needed because the success-path Stop at line 47 has the same key. It is argued, not struck.",
+      "line": 58
+    },
+    {
+      "file": "src/Bsft.Mediator/Transactions/TransactionDbContextResolver.cs",
+      "member": "Resolve",
+      "kind": "unobservable",
+      "mutator": "Conditional (false) mutation",
+      "original": "dbContextType is null || optionsType is null ? NotLoaded() : Resolve(serviceProvider, dbContextType, optionsType)",
+      "mutated": "(false?NotLoaded() :Resolve(serviceProvider, dbContextType, optionsType))",
+      "because": "The NotLoaded branch is reached only in a process where EF Core is not loaded; Bsft.Mediator.Tests references EF Core (InMemory, Sqlite), so in its process the marker types always resolve and the guard is unreachable, which is why NotLoaded() is excluded from coverage. It is argued, not struck."
+    },
+    {
+      "file": "src/Bsft.Mediator/Transactions/TransactionDbContextResolver.cs",
+      "member": "Resolve",
+      "kind": "equivalent",
+      "mutator": "Logical mutation",
+      "original": "dbContextType is null || optionsType is null",
+      "mutated": "dbContextType is null && optionsType is null",
+      "because": "Both marker types are looked up by name in the one EF Core assembly, so they are null together or loaded together; the two conditions differ only when exactly one is null, which cannot happen. Struck to prove it on the local proof branch proof/core-equivalents (c6e5995d, strike commit 335a082d plus null-forgiving operators on the two struck resolver calls so the && strike compiles as the mutant did, on main b28d0f5c): forced rebuild with 0 warnings, the 42 test projects that depend on Bsft.Mediator green at 7327/7327."
+    },
+    {
+      "file": "src/Bsft.Mediator/Transactions/TransactionDbContextResolver.cs",
+      "member": "ListAmbiguousContexts",
+      "kind": "unobservable",
+      "mutator": "Conditional (false) mutation",
+      "original": "dbContextType is null || optionsOpenType is null ? NotLoadedContexts() : ListAmbiguousContexts(services, dbContextType, optionsOpenType)",
+      "mutated": "(false?NotLoadedContexts() :ListAmbiguousContexts(services, dbContextType, optionsOpenType))",
+      "because": "As for the resolver guard at line 77: EF Core is always loaded in the Bsft.Mediator.Tests process, so the NotLoadedContexts branch is unreachable there, which is why NotLoadedContexts() is excluded from coverage. It is argued, not struck."
+    },
+    {
+      "file": "src/Bsft.Mediator/Transactions/TransactionDbContextResolver.cs",
+      "member": "ListAmbiguousContexts",
+      "kind": "equivalent",
+      "mutator": "Logical mutation",
+      "original": "dbContextType is null || optionsOpenType is null",
+      "mutated": "dbContextType is null && optionsOpenType is null",
+      "because": "DbContext and the open DbContextOptions<> come from the same EF Core assembly and are null together, so the two conditions differ only when exactly one is null, which cannot happen. Struck to prove it on the local proof branch proof/core-equivalents (c6e5995d, strike commit 335a082d plus null-forgiving operators on the two struck resolver calls so the && strike compiles as the mutant did, on main b28d0f5c): forced rebuild with 0 warnings, the 42 test projects that depend on Bsft.Mediator green at 7327/7327."
+    },
+    {
+      "file": "src/Bsft.Mediator/ValidationBehavior.cs",
+      "member": "HandleAsync",
+      "kind": "equivalent",
+      "mutator": "Statement mutation",
+      "original": "continue;",
+      "mutated": ";",
+      "because": "ValidationResult.IsValid is defined as Errors.Count == 0, so for a valid result the following loop over result.Errors runs zero times and adds nothing; the continue is only a shortcut. Struck to prove it on the local proof branch proof/core-equivalents (c6e5995d, strike commit 335a082d plus null-forgiving operators on the two struck resolver calls so the && strike compiles as the mutant did, on main b28d0f5c): forced rebuild with 0 warnings, the 42 test projects that depend on Bsft.Mediator green at 7327/7327."
+    },
+    {
+      "file": "src/Bsft.Mediator/StartupValidation/MediatorStartupValidator.cs",
+      "member": "CloseOrNull",
+      "kind": "equivalent",
+      "mutator": "Block removal mutation",
+      "original": "{ return null; }",
+      "mutated": "{}",
+      "because": "Stryker compiles the emptied catch with return default, and default of the Type? return is null, the value the original returns. Struck to prove it on the local proof branch proof/core-equivalents (c6e5995d, strike commit 335a082d plus null-forgiving operators on the two struck resolver calls so the && strike compiles as the mutant did, on main b28d0f5c): forced rebuild with 0 warnings, the 42 test projects that depend on Bsft.Mediator green at 7327/7327."
+    }
+  ]
+}

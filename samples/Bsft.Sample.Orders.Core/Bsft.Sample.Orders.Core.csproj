@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- A sample is documentation that compiles, not a package. Its README.md is read in the
+         repository rather than packed as a NuGet readme. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bsft.Data\Bsft.Data.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Mediator.Abstractions\Bsft.Mediator.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Mediator\Bsft.Mediator.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Messaging.Abstractions\Bsft.Messaging.Abstractions.csproj" />
+    <ProjectReference Include="..\Bsft.Sample.Inventory.Core\Bsft.Sample.Inventory.Core.csproj" />
+  </ItemGroup>
+</Project>

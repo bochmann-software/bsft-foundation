@@ -1,0 +1,59 @@
+<Project>
+
+  <!--
+    BsftOnlyTargetFramework (Directory.Build.props) narrows the Foundation projects to one of their
+    frameworks. A value no project targets would narrow nothing and leave a gate that means to measure
+    one framework measuring all of them, so it fails the build instead.
+  -->
+  <Target Name="BsftCheckOnlyTargetFramework"
+          BeforeTargets="DispatchToInnerBuilds;_CheckForInvalidConfigurationAndPlatform"
+          Condition="'$(BsftOnlyTargetFramework)' != '' And !$([System.String]::Copy(';$(BsftFrameworkTargetFramework);$(BsftFoundationTargetFrameworks);').Contains(';$(BsftOnlyTargetFramework);'))">
+    <Error Text="BsftOnlyTargetFramework is '$(BsftOnlyTargetFramework)', which no project targets; the frameworks are $(BsftFoundationTargetFrameworks)." />
+  </Target>
+
+  <!--
+    Coverage collector configuration, derived once for every test project.
+
+    A test project that runs without collector configuration does not merely measure less:
+    it collects every referenced module as well. Those entries arrive with zero hits and
+    never merge with the real, covered entries, so they land in the merged report as
+    uncovered lines of a module the project does not even test. The symptom points at the wrong place — the report blames the referenced module,
+    not the project that is missing its filter.
+
+    That combination is created by accident whenever a module or a test project is added, so
+    the settings are derived here instead of being checked in per project. The covered module
+    is the project name without its ".Tests" suffix, which holds for every test project in the
+    repository. A project that needs something else sets BsftCoveredModule, or sets
+    RunSettingsFilePath to a file of its own and is left alone.
+  -->
+
+  <PropertyGroup>
+    <!-- Named once, so the suffix test below and the length it trims cannot drift apart. -->
+    <BsftTestProjectSuffix>.Tests</BsftTestProjectSuffix>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('$(BsftTestProjectSuffix)'))">
+    <BsftCoveredModule Condition="'$(BsftCoveredModule)' == ''">$(MSBuildProjectName.Substring(0, $([MSBuild]::Subtract($(MSBuildProjectName.Length), $(BsftTestProjectSuffix.Length)))))</BsftCoveredModule>
+    <BsftCoverageRunSettingsTemplate>$(MSBuildThisFileDirectory)tests\coverage.runsettings.template</BsftCoverageRunSettingsTemplate>
+    <BsftGeneratedRunSettings>$(MSBuildProjectDirectory)\$(BaseIntermediateOutputPath)coverage.runsettings</BsftGeneratedRunSettings>
+    <RunSettingsFilePath Condition="'$(RunSettingsFilePath)' == ''">$(BsftGeneratedRunSettings)</RunSettingsFilePath>
+  </PropertyGroup>
+
+  <!--
+    Runs before the build so that the file is in place for a later test run that skips building.
+    WriteOnlyWhenDifferent keeps the timestamp stable, so generating it does not force a rebuild.
+  -->
+  <Target Name="BsftGenerateCoverageRunSettings"
+          Condition="$(MSBuildProjectName.EndsWith('$(BsftTestProjectSuffix)')) And '$(RunSettingsFilePath)' == '$(BsftGeneratedRunSettings)'"
+          BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <BsftRunSettingsContent>$([System.IO.File]::ReadAllText('$(BsftCoverageRunSettingsTemplate)').Replace('__MODULE__', '$(BsftCoveredModule)'))</BsftRunSettingsContent>
+    </PropertyGroup>
+
+    <WriteLinesToFile File="$(BsftGeneratedRunSettings)"
+                      Lines="$(BsftRunSettingsContent)"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
+  </Target>
+
+</Project>

@@ -1,0 +1,12 @@
+@name "Command without its mediator marker interface"
+@severity error
+@category "Architecture"
+@description "A type named *Command must implement ICommand or ICommand<TResult>. The marker is what IMediator dispatches on and what infers TResult, so a message without it cannot be sent; a shape that merely carries arguments to a method is named *Request instead."
+@recommendation "Implement the marker, or rename the type to *Request if it is a parameter object rather than a message. See docs/package-conventions.md section 4, 'Mediator messages and handlers'."
+
+from t in Types
+where (t.Kind == "Class" || t.Kind == "Struct" || t.Kind == "Record") && !t.IsAbstract && !t.IsStatic
+where t.Name.EndsWith("Command")
+where !t.ImplementedInterfaces.Any(i => i.Name.StartsWith("ICommand"))
+where t.BaseType == null || !t.BaseType.ImplementedInterfaces.Any(i => i.Name.StartsWith("ICommand"))
+select t

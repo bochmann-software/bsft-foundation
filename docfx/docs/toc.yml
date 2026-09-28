@@ -1,0 +1,73 @@
+# Table of contents of the topic pages. The pages live in docs/ at the repository root and
+# docfx.json publishes them under docs/ next to this file; docfx resolves a link against the
+# source file, hence ../../docs/.
+- name: Packages
+  href: ../../docs/packages.md
+- name: Core
+  items:
+  - name: Core
+    href: ../../docs/core.md
+  - name: Mediator
+    href: ../../docs/mediator.md
+  - name: Event aggregator
+    href: ../../docs/event-aggregator.md
+  - name: Sagas
+    href: ../../docs/saga.md
+  - name: Saga timeouts
+    href: ../../docs/saga-timeouts.md
+  - name: Correlation
+    href: ../../docs/correlation.md
+  - name: Logging
+    href: ../../docs/logging.md
+  - name: Mapping
+    href: ../../docs/mapping.md
+  - name: Modules
+    href: ../../docs/modules.md
+- name: Hosting and HTTP
+  items:
+  - name: Hosting
+    href: ../../docs/hosting.md
+  - name: HTTP
+    href: ../../docs/http.md
+  - name: HTTP egress
+    href: ../../docs/http-egress.md
+  - name: Resilience
+    href: ../../docs/resilience.md
+  - name: Observability
+    href: ../../docs/observability.md
+- name: Data
+  items:
+  - name: Data
+    href: ../../docs/data.md
+  - name: Full-text search
+    href: ../../docs/search.md
+  - name: Caching
+    href: ../../docs/caching.md
+  - name: Business calendar
+    href: ../../docs/calendar.md
+  - name: Schema
+    href: ../../docs/schema.md
+  - name: Localization
+    href: ../../docs/localization.md
+  - name: Retention
+    href: ../../docs/retention.md
+- name: Reliable messaging
+  items:
+  - name: Idempotency
+    href: ../../docs/idempotency.md
+  - name: Outbox
+    href: ../../docs/outbox.md
+  - name: Messaging
+    href: ../../docs/messaging.md
+  - name: Scheduling
+    href: ../../docs/scheduling.md
+- name: Testing
+  href: ../../docs/testing.md
+- name: Conventions
+  items:
+  - name: Package conventions
+    href: ../../docs/package-conventions.md
+  - name: Naming
+    href: ../../docs/naming.md
+  - name: Architecture rules
+    href: ../../docs/architecture-rules.md

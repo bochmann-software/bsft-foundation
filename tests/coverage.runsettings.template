@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  The coverage collector configuration for every test project in this repository.
+
+  Do not copy this file into a project, and do not edit the generated copy under obj.
+  Directory.Build.targets materializes this template per test project, filling in the module
+  that project covers, so a newly added test project is scoped correctly by default.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <Include>[__MODULE__]*</Include>
+          <!--
+            CompilerGeneratedAttribute must not be added here, and SkipAutoProps must not be set. Coverlet drops every
+            type and member carrying an excluded attribute before it instruments, and the compiler puts that attribute
+            on the types it lowers a body into (async and iterator state machines, lambda display classes, local
+            functions) as well as on the members it writes itself (auto-property accessors, synthesized record
+            members). Until this check existed the attribute was listed: the gate reported 83513 of 83513 lines while the
+            solution has 126137, so 42624 lines, a third of it, were never looked at, and an async method no test
+            called was absent from the report instead of appearing at rate 0. tests/check-state-machine-coverage.sh
+            fails when a package with async or iterator bodies reports no state machine, whatever hides it.
+          -->
+          <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

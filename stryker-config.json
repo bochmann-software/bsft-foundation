@@ -1,0 +1,22 @@
+{
+  "stryker-config": {
+    "target-framework": "net8.0",
+    "configuration": "Release",
+    "mutation-level": "Standard",
+    "coverage-analysis": "perTest",
+    "break-on-initial-test-failure": true,
+    "reporters": [ "json", "cleartext", "progress" ],
+    "report-file-name": "mutation-report",
+    "thresholds": { "high": 100, "low": 100, "break": 0 },
+    "mutate": [ "!**/obj/**", "!**/bin/**", "!**/samples/**", "!**/templates/**" ],
+    "ignore-mutations": [ "string" ],
+    "ignore-methods": [
+      "ArgumentNullException.ThrowIfNull",
+      "ArgumentException.ThrowIfNullOrEmpty",
+      "ArgumentException.ThrowIfNullOrWhiteSpace",
+      "ArgumentOutOfRangeException.ThrowIf*",
+      "ObjectDisposedException.ThrowIf",
+      "ConfigureAwait"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework query contracts: the paged request and result, the per-item entity tag a list row publishes, the filter AST, the sort criteria and the search request. Carries no dependencies at all, so a browser or console client can speak the query surface without the EF Core or ASP.NET Core stack.</Description>
+  </PropertyGroup>
+
+  <!-- No ItemGroup on purpose. The point of this package is the empty dependency list: every
+       reference added here lands in the bundle of every client that only wants the DTOs, which is
+       precisely what splitting it out of Bsft.Data was for. A test pins it. -->
+</Project>

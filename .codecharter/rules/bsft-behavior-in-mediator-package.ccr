@@ -1,0 +1,10 @@
+@name "Pipeline behavior outside a Bsft.<X>.Mediator package"
+@severity error
+@category "Architecture"
+@description "A concern package never contains a mediator pipeline behavior. Bsft.<X>.Mediator is the behavior package for concern X, so a *Behavior class lives in the mediator itself or in the concern's .Mediator satellite; anywhere else it drags Bsft.Mediator into the closure of every consumer of the concern."
+@recommendation "Move the behavior into the concern's Bsft.<X>.Mediator package, together with its opt-in marker and its AddBsft<X>Mediator registration. See docs/package-conventions.md section 1, 'The Bsft.<X>.Mediator satellite'."
+
+from t in Types
+where t.Kind == "Class" && t.Name.EndsWith("Behavior")
+where !t.FullName.Contains(".Mediator.")
+select t

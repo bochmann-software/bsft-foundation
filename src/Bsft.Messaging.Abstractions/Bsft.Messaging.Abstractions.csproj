@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework messaging abstractions: integration events, the message bus contract, the transactional outbox store contract and the paged reader an operator console lists parked and pending messages through.</Description>
+  </PropertyGroup>
+
+  <!-- Bsft.Data.Contracts and nothing else. It carries no dependencies at all - a test pins that -
+       so the empty closure this package is worth having stays empty, and the reader speaks the same
+       PagedRequest / PagedResult every other admin list in the framework speaks instead of inventing
+       a third paging vocabulary for one family. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Data.Contracts\Bsft.Data.Contracts.csproj" />
+  </ItemGroup>
+</Project>

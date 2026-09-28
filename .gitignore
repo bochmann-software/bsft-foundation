@@ -1,0 +1,46 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+
+## IDE
+.vs/
+.idea/
+*.swp
+*~
+
+## Build
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+TestResults/
+
+## Logs
+logs/
+
+## SQLite
+*.db
+*.db-shm
+*.db-wal
+
+## OS
+Thumbs.db
+.DS_Store
+
+# Coverage / test result artifacts
+coverage-test/
+cov/
+**/TestResults/
+*.cobertura.xml
+
+# Mutation testing (Stryker.NET) sandboxes and reports
+StrykerOutput/

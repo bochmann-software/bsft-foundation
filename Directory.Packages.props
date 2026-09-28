@@ -1,0 +1,169 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!-- The two version lines that follow the target framework. net8.0 keeps the lines it has always
+       been built against, so a net8.0 consumer's dependency graph does not move. net10.0, which only
+       the Foundation packages and their test projects target (Directory.Build.props), takes the
+       10.0.x line of both:
+
+       - BsftRuntimePackageVersion, the Microsoft.Extensions.* group, System.Diagnostics.DiagnosticSource
+         and System.Threading.RateLimiting. OpenTelemetry 1.15 depends on Microsoft.Extensions.* 10.0.0
+         in its net10.0 dependency group, and a 9.0.19 pin below that fails the restore as a downgrade
+         (NU1605).
+       - BsftAspNetCorePackageVersion, the ASP.NET Core packages below. Microsoft.AspNetCore.Mvc.Testing
+         8.0.x brings a TestHost whose response PipeWriter does not implement UnflushedBytes, which the
+         ASP.NET Core 10 JSON writer requires: every JSON endpoint answers 500 under the 8.0.x test host
+         on the 10.0 shared framework.
+
+       The inner build of each framework sets TargetFramework as a global property, so the condition
+       sees it. EF Core stays on 9.0.19 for both frameworks: it runs on net10.0, and EF Core 10 is
+       net10.0-only, so one EF Core line keeps both assets of a Foundation package on the same data
+       access code. -->
+  <PropertyGroup>
+    <BsftRuntimePackageVersion>9.0.19</BsftRuntimePackageVersion>
+    <BsftRuntimePackageVersion Condition="'$(TargetFramework)' == 'net10.0'">10.0.12</BsftRuntimePackageVersion>
+    <BsftAspNetCorePackageVersion>8.0.13</BsftAspNetCorePackageVersion>
+    <BsftAspNetCorePackageVersion Condition="'$(TargetFramework)' == 'net10.0'">10.0.12</BsftAspNetCorePackageVersion>
+  </PropertyGroup>
+
+  <!-- Microsoft.Extensions.* -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(BsftRuntimePackageVersion)" />
+    <!-- Bsft.Security needs the implementation package as well as the abstractions: IHealthCheck and
+         HealthCheckRegistration live in the abstractions, but HealthCheckServiceOptions — the only
+         way to contribute a registration without calling AddHealthChecks() — does not. Neither
+         package carries an ASP.NET Core framework reference, so a worker or console host is
+         unaffected. -->
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="$(BsftRuntimePackageVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="$(BsftRuntimePackageVersion)" />
+  </ItemGroup>
+
+  <!-- Diagnostics / Observability (vendor-neutral emit layer) -->
+  <ItemGroup>
+    <PackageVersion Include="System.Diagnostics.DiagnosticSource" Version="$(BsftRuntimePackageVersion)" />
+  </ItemGroup>
+
+  <!-- ASP.NET Core.
+       For net8.0 (BsftAspNetCorePackageVersion; net10.0 takes the 10.0.x line, see the top of this file)
+       pinned on the 8.0.13 line rather than with the Microsoft.Extensions.* group on 9.0.19. Not every
+       package in this group is net9.0-only in its 9.0.x build — Microsoft.AspNetCore.DataProtection and
+       Microsoft.AspNetCore.SignalR.Client both still carry a netstandard2.0 asset at 9.0.19 and would be
+       net8.0-safe to raise — but Microsoft.AspNetCore.Authentication.JwtBearer,
+       Microsoft.AspNetCore.Authentication.OpenIdConnect, Microsoft.AspNetCore.DataProtection.EntityFrameworkCore,
+       Microsoft.AspNetCore.Mvc.Testing and Microsoft.AspNetCore.SignalR.StackExchangeRedis are genuinely
+       net9.0-only at 9.0.19, and raising those would force the repository off net8.0. The whole group is
+       kept on the 8.0.13 line together rather than splitting it, so this comment states one policy instead
+       of a per-package table that drifts out of date at the next ASP.NET Core release. Their own
+       Microsoft.Extensions.* dependencies are 8.0.x *minimums*, which NuGet unifies upward to the 9.0.19
+       pins above.
+
+       Microsoft.AspNetCore.DataProtection.EntityFrameworkCore stays on this 8.0.13 line for the net9.0-only
+       reason above even though the rest of the EF Core group below moved to 9.0.x for the
+       ExecuteUpdateAsync/ExecuteDeleteAsync relocation (docs/migration-1.3.10.md): NuGet resolves the
+       transitive Microsoft.EntityFrameworkCore dependency this package carries (>= 8.0.13) up to the
+       9.0.19 pin used everywhere else, so it runs against the EF9 assemblies at runtime. That is safe
+       because EntityFrameworkCoreXmlRepository — the only EF Core surface this package touches — uses
+       nothing but AsNoTracking, DbSet.Add and SaveChanges, none of which moved or changed shape
+       between EF8 and EF9. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="$(BsftAspNetCorePackageVersion)" />
+  </ItemGroup>
+
+  <!-- EF Core.
+       Baselined on 9.0.x (net8.0-capable) rather than 8.0.x: ExecuteUpdateAsync/ExecuteDeleteAsync
+       moved from Microsoft.EntityFrameworkCore.Relational into the Core assembly
+       (EntityFrameworkQueryableExtensions) between EF Core 8 and 9, so any Bsft.*.EfCore package
+       compiled against EF8 throws MissingMethodException the moment a host resolves it against an EF9
+       runtime. The break is not specific to one package: 23 Bsft.*.EfCore packages in this repository
+       call ExecuteUpdateAsync or ExecuteDeleteAsync today, in the shared outbox/webhook-claim
+       pattern the doc comments describe. Bsft.Messaging.EFCore is only where it was first found, not
+       the extent of the blast radius. Compiling against EF9 closes that whole class of
+       binary-compatibility break for all of them at once rather than patching call sites one at a
+       time. See docs/migration-1.3.10.md. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="9.0.19" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.19" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="9.0.19" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.19" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.19" />
+    <!-- The Npgsql provider tracks EF Core by major version: 9.0.x targets EF Core 9, the line this
+         repository is now baselined on. It still targets net8.0. -->
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+  </ItemGroup>
+
+  <!-- Resilience -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="8.10.0" />
+    <PackageVersion Include="Polly.Core" Version="8.7.0" />
+  </ItemGroup>
+
+  <!-- Messaging transports -->
+  <ItemGroup>
+    <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
+  </ItemGroup>
+
+  <!-- OAuth 2.0 authorization server.
+       Bsft.Auth.TokenServer takes OpenIddict for the protocol vocabulary and the wire model only:
+       OpenIddictRequest / OpenIddictResponse and the constants for grant types, error codes,
+       parameter names and claim names. The flow logic, the token issuance seam, the install-grant
+       consent evaluation and the refresh-token families are Bsft's, behind Bsft interfaces, so no
+       OpenIddict type appears on any public API surface. Pinned to an exact 6.x version: minor and
+       patch bumps are routine, a major bump re-runs the full flow suite and a security review.
+       Microsoft.IdentityModel.JsonWebTokens is the minting half of the same stack and is pinned to
+       the version OpenIddict.Abstractions unifies that stack to, so a host cannot end up with two
+       versions of the token pipeline.
+
+       Microsoft.IdentityModel.Protocols.OpenIdConnect is the reading half, on the same version and
+       for the same reason. Bsft.Auth.Oidc's handler brings it transitively on the 7.x line; in a host
+       that runs the relying party and the token server together, 7.x protocols meeting 8.12.0 tokens
+       silently drops members of the discovery document — the authorization endpoint among them, which
+       fails every login. It is therefore taken directly there rather than left to resolution. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.12.0" />
+  </ItemGroup>
+
+  <!-- Third-Party -->
+  <ItemGroup>
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="6.9.0" />
+    <PackageVersion Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.0" />
+  </ItemGroup>
+
+  <!-- OpenTelemetry (collect/export layer) -->
+  <ItemGroup>
+    <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Exporter.InMemory" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.12.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.12.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.12.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.14.0-beta.2" />
+  </ItemGroup>
+
+  <!-- Testing -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="FluentAssertions" Version="7.0.0" />
+    <PackageVersion Include="NSubstitute" Version="5.3.0" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+  </ItemGroup>
+</Project>

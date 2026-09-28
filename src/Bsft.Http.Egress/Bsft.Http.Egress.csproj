@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework outbound egress guard: the SSRF address policy (loopback, link-local and the cloud metadata address, the private and carrier-grade NAT ranges, and the IPv6 forms that embed an IPv4 address), a connect-time guard that resolves the host itself and connects to the address it judged, and the HttpClient wiring for both.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Http.Egress.Tests" />
+  </ItemGroup>
+
+  <!-- No FrameworkReference on Microsoft.AspNetCore.App. This is the outbound half of an HTTP call and
+       a console worker, a Blazor WebAssembly client or a dependency-light service must be able to take
+       it without the server stack; a test pins the closure so the reference cannot creep back in. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+</Project>

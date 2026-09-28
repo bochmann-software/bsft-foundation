@@ -1,0 +1,105 @@
+<Project>
+  <!-- BsftVersion and the repository URLs: what differs between this repository and the public
+       bsft-foundation repository exported from it. -->
+  <Import Project="$(MSBuildThisFileDirectory)Repository.props" />
+
+  <!-- The version of the Foundation tier: every package whose project file says
+       <Version>$(BsftFoundationVersion)</Version> (docs/package-conventions.md, "Tiers: Foundation
+       and framework"). It is shared, so it moves with the export: the public repository releases
+       the Foundation packages at this version to nuget.org, and the framework packages here depend
+       on exactly that version. -->
+  <PropertyGroup>
+    <BsftFoundationVersion>2.1.0</BsftFoundationVersion>
+  </PropertyGroup>
+
+  <!-- The target frameworks follow the tier (docs/package-conventions.md, "Tiers: Foundation and
+       framework"). A Foundation package targets net8.0 and net10.0; every other project net8.0.
+       The tier is read from the one marker there is, the <Version> line of the package's project
+       file, so no project names its target frameworks and there is no second list to keep in step
+       (the structure check's tier-target rule refuses a project file that names them).
+
+       A test project takes the tier of the package it tests, src/<name without .Tests>, so a
+       Foundation package is tested on every framework it ships for. A sample or a test project
+       without a package of that name stays on net8.0.
+
+       The marker is compared as text, escaped (%24 is "$") so that MSBuild does not expand it.
+
+       BsftOnlyTargetFramework (a property or an environment variable) narrows every Foundation
+       project to that one of its frameworks, for a gate that has to measure one framework at a time:
+       the coverage workflow gates net8.0 over Bsft.sln with it, because a line covered on one
+       framework says nothing about the other. It is meant for net8.0, the framework every project
+       shares: narrowed to net10.0, the samples lose the packages they reference, so the further
+       frameworks are tested one by one after a full build instead. Unset, every
+       framework is built and tested. -->
+  <PropertyGroup>
+    <BsftFrameworkTargetFramework>net8.0</BsftFrameworkTargetFramework>
+    <BsftFoundationTargetFrameworks>net8.0;net10.0</BsftFoundationTargetFrameworks>
+    <BsftTierProjectFile>$(MSBuildProjectFullPath)</BsftTierProjectFile>
+    <BsftTierProjectFile Condition="$(MSBuildProjectName.EndsWith('.Tests'))">$(MSBuildThisFileDirectory)src/$(MSBuildProjectName.Substring(0, $([MSBuild]::Subtract($(MSBuildProjectName.Length), 6))))/$(MSBuildProjectName.Substring(0, $([MSBuild]::Subtract($(MSBuildProjectName.Length), 6)))).csproj</BsftTierProjectFile>
+    <BsftIsFoundation>false</BsftIsFoundation>
+    <BsftIsFoundation Condition="Exists('$(BsftTierProjectFile)') And $([System.IO.File]::ReadAllText('$(BsftTierProjectFile)').Contains('&lt;Version&gt;%24(BsftFoundationVersion)&lt;/Version&gt;'))">true</BsftIsFoundation>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(BsftIsFoundation)' == 'true'">
+    <TargetFrameworks>$(BsftFoundationTargetFrameworks)</TargetFrameworks>
+    <TargetFrameworks Condition="'$(BsftOnlyTargetFramework)' != '' And $([System.String]::Copy(';$(BsftFoundationTargetFrameworks);').Contains(';$(BsftOnlyTargetFramework);'))">$(BsftOnlyTargetFramework)</TargetFrameworks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(BsftIsFoundation)' != 'true'">
+    <TargetFramework>$(BsftFrameworkTargetFramework)</TargetFramework>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- NU1507 is a NuGet restore warning about multiple package sources defined on the build host
+         (central package management). It reflects the runner's source configuration, not a code
+         defect, and would otherwise fail the build intermittently on the self-hosted runner. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1507</WarningsNotAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- ADR-0013 D3: a file's namespace is its project's root namespace plus its folder, without
+       exceptions. IDE0130 checks that in the build (see .editorconfig). An .Abstractions package
+       declares the namespaces of the package it abstracts (D4), so its root drops the suffix. -->
+  <PropertyGroup>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Abstractions'))">
+    <RootNamespace>$(MSBuildProjectName.Substring(0, $([MSBuild]::Subtract($(MSBuildProjectName.Length), 13))))</RootNamespace>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Authors>Bochmann Software GmbH</Authors>
+    <Company>Bochmann Software GmbH</Company>
+    <Product>BSFT Framework</Product>
+    <Copyright>Copyright © Bochmann Software GmbH</Copyright>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>bsft;framework;dotnet;aspnetcore;mediator;saga;event-aggregator;multitenancy</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <!-- Ship the package's own README (docs/package-conventions.md section 5) as the NuGet readme.
+       A packable project without one fails to pack with NU5039, which is the intent. -->
+  <ItemGroup Condition="'$(IsPackable)' != 'false' And Exists('$(MSBuildProjectDirectory)/README.md')">
+    <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
+    <PackageReference Include="coverlet.collector">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

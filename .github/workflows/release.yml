@@ -1,0 +1,100 @@
+name: Release
+
+# A pushed tag v<version> releases that commit to nuget.org. The tag is pushed by the maintainer after
+# reviewing the release commit; nothing else starts this workflow.
+#
+# Publishing uses nuget.org Trusted Publishing: NuGet/login exchanges the job's GitHub OIDC token for a
+# NuGet API key that lives for one hour, so no long-lived key is stored in this repository. The policy
+# on nuget.org names this repository and this workflow file (release.yml) and, as a second lock, the
+# `nuget` environment below.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+# Never two releases at once: two runs racing to push the same version helps nobody.
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token NuGet/login exchanges; nothing else in the job needs it
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+
+    # A tag on the wrong commit must not publish a wrong version.
+    - name: Check the tag against BsftFoundationVersion
+      id: version
+      run: |
+        version="$(sed -n 's:.*<BsftFoundationVersion>[[:space:]]*\([^<[:space:]]*\)[[:space:]]*</BsftFoundationVersion>.*:\1:p' Directory.Build.props | head -n 1)"
+        if [ -z "$version" ]; then
+          echo "::error::BsftFoundationVersion could not be read from Directory.Build.props."
+          exit 1
+        fi
+        if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+          echo "::error::Tag $GITHUB_REF_NAME does not match Directory.Build.props, which says $version; the tag must be v$version."
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - name: Build
+      run: dotnet build Bsft.sln -c Release --nologo
+    - name: Test
+      run: dotnet test Bsft.sln -c Release --no-build --nologo
+    - name: Pack
+      run: dotnet pack Bsft.sln -c Release --no-build --nologo -o artifacts
+
+    # Only Bsft packages at the tagged version, and at least one.
+    - name: Check the packages
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        packages=(artifacts/*.nupkg)
+        if [ "${#packages[@]}" -eq 0 ]; then echo "::error::dotnet pack produced no package."; exit 1; fi
+        for p in "${packages[@]}"; do
+          name="$(basename "$p")"
+          case "$name" in
+            Bsft.*."$VERSION".nupkg) echo "$name" ;;
+            *) echo "::error::Unexpected package $name (expected Bsft.*.$VERSION.nupkg)."; exit 1 ;;
+          esac
+        done
+
+    - name: NuGet login (OIDC, short-lived API key)
+      uses: NuGet/login@v1
+      id: login
+      with:
+        user: ${{ secrets.NUGET_USER }}   # the nuget.org profile name that owns the policy, not an e-mail address
+
+    # The .snupkg symbol packages next to them are pushed along automatically.
+    - name: Push to nuget.org
+      run: >
+        dotnet nuget push "artifacts/*.nupkg"
+        --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
+        --source https://api.nuget.org/v3/index.json
+        --skip-duplicate
+
+  github-release:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Create the GitHub Release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      run: gh release create "$GITHUB_REF_NAME" --title "Bsft Foundation ${GITHUB_REF_NAME#v}" --verify-tag --generate-notes

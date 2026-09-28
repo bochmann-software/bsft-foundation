@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- A sample is documentation that compiles, not a package. Its README.md is read in the
+         repository rather than packed as a NuGet readme. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bsft.Core\Bsft.Core.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Data\Bsft.Data.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Localization\Bsft.Localization.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Mapping\Bsft.Mapping.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Mediator.Abstractions\Bsft.Mediator.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Mediator\Bsft.Mediator.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Messaging.Abstractions\Bsft.Messaging.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Modules\Bsft.Modules.csproj" />
+    <ProjectReference Include="..\Bsft.Sample.Inventory.Core\Bsft.Sample.Inventory.Core.csproj" />
+    <ProjectReference Include="..\Bsft.Sample.Orders.Core\Bsft.Sample.Orders.Core.csproj" />
+  </ItemGroup>
+</Project>

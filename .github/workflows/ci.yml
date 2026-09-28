@@ -1,0 +1,176 @@
+name: CI
+
+# This repository is public, so every job runs on GitHub-hosted runners and never on a self-hosted
+# one: a pull request from a fork runs its own code, and on a self-hosted runner that code would run
+# on the maintainer's machine. For the same reason nothing here uses pull_request_target, which runs
+# with the base repository's secrets.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Build, every test with coverage collection, the 100 % line coverage gate and the structure check.
+  # No secret is needed, so this runs on fork pull requests too.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+    - uses: actions/setup-node@v5
+      with:
+        node-version: '24'
+
+    - name: Script self-tests
+      run: |
+        node --test '.github/structure/*.test.mjs'
+        node --test .github/coverage-gate.test.mjs
+
+    - name: Structure (sources)
+      run: node .github/verify-structure.mjs
+
+    - name: Build
+      run: dotnet build Bsft.sln -c Release --nologo
+
+    # The packages target several frameworks (BsftFoundationTargetFrameworks in
+    # Directory.Build.props), and each is tested and gated on its own, into a results directory of
+    # its own: a line covered on one framework says nothing about another, so their reports are
+    # never merged.
+    - name: Target frameworks
+      id: frameworks
+      run: |
+        set -euo pipefail
+        frameworks="$(sed -n 's:.*<BsftFoundationTargetFrameworks>[[:space:]]*\([^<[:space:]]*\)[[:space:]]*</BsftFoundationTargetFrameworks>.*:\1:p' Directory.Build.props | head -n 1)"
+        if [ -z "$frameworks" ]; then
+          echo "::error::BsftFoundationTargetFrameworks could not be read from Directory.Build.props."
+          exit 1
+        fi
+        echo "list=${frameworks//;/ }" >> "$GITHUB_OUTPUT"
+
+    - name: Test with coverage, per framework
+      run: |
+        set -euo pipefail
+        for tfm in ${{ steps.frameworks.outputs.list }}; do
+          dotnet test Bsft.sln -c Release --no-build --nologo --framework "$tfm" \
+            --collect "XPlat Code Coverage" --results-directory "TestResults/coverage/$tfm" --logger trx
+        done
+
+    # Every package is held at full line coverage on every framework, so the gate is an equality
+    # check, made once per framework.
+    - name: Coverage gate, per framework
+      run: |
+        failed=0
+        for tfm in ${{ steps.frameworks.outputs.list }}; do
+          echo "$tfm:"
+          node .github/coverage-gate.mjs --reports "TestResults/coverage/$tfm" --min 100 || failed=1
+        done
+        exit "$failed"
+
+    # The line gate cannot see a body missing from its reports; an async or iterator body goes
+    # missing whenever something tells the collector to skip compiler-generated code.
+    - name: Check that async and iterator bodies are measured
+      if: success() || failure()
+      run: |
+        failed=0
+        for tfm in ${{ steps.frameworks.outputs.list }}; do
+          bash tests/check-state-machine-coverage.sh "TestResults/coverage/$tfm" || failed=1
+        done
+        exit "$failed"
+
+    - name: Keep the test results of a failed run
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: TestResults/coverage/**/*.trx
+        if-no-files-found: ignore
+        retention-days: 14
+
+  # CodeCharter analysis and the dependency-graph half of the structure check. Both need the
+  # CODECHARTER_API_KEY secret, which GitHub does not hand to a pull request from a fork; the job
+  # is skipped there rather than failed, and the maintainer's own pushes and pull requests run it.
+  codecharter:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - name: Check for the CodeCharter key
+      id: key
+      env:
+        CODECHARTER_API_KEY: ${{ secrets.CODECHARTER_API_KEY }}
+      run: |
+        if [ -z "$CODECHARTER_API_KEY" ]; then
+          echo "::notice title=CodeCharter skipped::CODECHARTER_API_KEY is not set in this repository."
+          echo "present=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        fi
+    - uses: actions/checkout@v5
+      if: steps.key.outputs.present == 'true'
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-dotnet@v5
+      if: steps.key.outputs.present == 'true'
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+    - uses: actions/setup-node@v5
+      if: steps.key.outputs.present == 'true'
+      with:
+        node-version: '24'
+    # Several rule exemptions only resolve with build artifacts present.
+    - name: Build
+      if: steps.key.outputs.present == 'true'
+      run: dotnet build Bsft.sln -c Release --nologo
+    - name: Structure (namespace graph)
+      if: steps.key.outputs.present == 'true'
+      env:
+        CODECHARTER_API_KEY: ${{ secrets.CODECHARTER_API_KEY }}
+        CODECHARTER_ORG: bochmann-software
+        CODECHARTER_SKIP_UPDATE: '1'
+        CC_TOOL_PATH: ${{ runner.temp }}/codecharter-cli
+        CC_VERSION: 1.6.4
+      run: |
+        set -euo pipefail
+        export XDG_CONFIG_HOME="$RUNNER_TEMP/codecharter-config"
+        mkdir -p "$XDG_CONFIG_HOME"
+        dotnet tool install --tool-path "$CC_TOOL_PATH" CodeCharter.Cli --version "$CC_VERSION"
+        export PATH="$CC_TOOL_PATH:$PATH"
+        codecharter graph overview Bsft.sln --top 100000 --format json > "$RUNNER_TEMP/namespace-graph.json"
+        node .github/verify-structure.mjs --graph "$RUNNER_TEMP/namespace-graph.json"
+    - name: Determine the diff range
+      if: steps.key.outputs.present == 'true'
+      id: diff-range
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "range=true" >> "$GITHUB_OUTPUT"
+        else
+          before="${{ github.event.before }}"
+          if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+            echo "range=HEAD~1..HEAD" >> "$GITHUB_OUTPUT"
+          else
+            echo "range=${before}..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+        fi
+    - uses: bochmann-software/codecharter@v1
+      if: steps.key.outputs.present == 'true'
+      with:
+        version: v1.6.4
+        solution: Bsft.sln
+        api-key: ${{ secrets.CODECHARTER_API_KEY }}
+        diff: ${{ steps.diff-range.outputs.range }}
+        fail-on: info

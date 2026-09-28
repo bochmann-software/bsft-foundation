@@ -1,0 +1,72 @@
+name: Pages
+
+# Builds the developer docs site (docfx/) and publishes it to GitHub Pages:
+# https://bochmann-software.github.io/bsft-foundation/
+# The repository setting Settings > Pages > Source must be "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push supersedes a queued one, but a running deployment is
+# allowed to finish so the site is never left half-published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # Pinned: a docfx update can turn new warnings into a failed build on unchanged docs, so it is
+  # a change of its own. The local preview reads the version from this line.
+  DOCFX_VERSION: '2.81.0'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+
+    - name: Install docfx
+      run: dotnet tool install --global docfx --version "$DOCFX_VERSION"
+
+    # One restore for all projects; docfx.json sets noRestore, because docfx would otherwise
+    # restore every project on its own.
+    - name: Restore
+      run: dotnet restore Bsft.sln
+
+    # Metadata (API reference from the projects under src/) and build in one run. Warnings are
+    # errors, so a broken link or an unresolved xref fails the build. The one code docfx.json
+    # relaxes is InvalidCref, for crefs inherited from EF Core's own documentation.
+    - name: Build the site
+      run: docfx docfx/docfx.json --warningsAsErrors
+
+    - uses: actions/configure-pages@v6
+
+    - uses: actions/upload-pages-artifact@v5
+      with:
+        path: docfx/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - id: deployment
+      uses: actions/deploy-pages@v5

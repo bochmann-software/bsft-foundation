@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework outbox abstractions: the lease protocol a durable outbox row answers, the payload a drain pass carries and the side effect it applies.</Description>
+  </PropertyGroup>
+</Project>

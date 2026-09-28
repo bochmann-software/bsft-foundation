@@ -1,0 +1,13 @@
+@name "DI entry point outside the package's DependencyInjection namespace"
+@severity error
+@category "Naming"
+@description "A package's DI entry points (<Feature>ServiceCollectionExtensions, <Feature>EndpointRouteBuilderExtensions, <Feature>ApplicationBuilderExtensions) live in <Package>.DependencyInjection, so a host imports one namespace per package to wire it and the feature namespaces never depend on their own wiring."
+@recommendation "Move the class into the package's DependencyInjection folder. See docs/package-conventions.md section 4 and ADR-0013 D2."
+
+from t in Types
+where t.Kind == "Class" && t.IsStatic
+where t.Name.EndsWith("ServiceCollectionExtensions")
+    || t.Name.EndsWith("EndpointRouteBuilderExtensions")
+    || t.Name.EndsWith("ApplicationBuilderExtensions")
+where !t.Namespace.FullName.EndsWith(".DependencyInjection")
+select t

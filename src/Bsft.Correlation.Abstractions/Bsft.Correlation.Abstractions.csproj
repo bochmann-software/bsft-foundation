@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework correlation contracts: ICorrelationContext and the X-Correlation-Id header name. Pure .NET with no ASP.NET Core dependency, so a Blazor WebAssembly or console client can read and forward a correlation ID without pulling the server stack into its bundle.</Description>
+  </PropertyGroup>
+
+  <!-- No ItemGroup on purpose. The point of this package is the empty dependency list: it carries the
+       client-safe correlation contract (an interface and a header-name constant, both pure System.*)
+       so a browser or console client can reference it without the Microsoft.AspNetCore.App
+       FrameworkReference that Bsft.Correlation pulls in. A test pins the empty closure. -->
+</Project>

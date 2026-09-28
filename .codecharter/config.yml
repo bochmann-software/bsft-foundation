@@ -1,0 +1,665 @@
+version: 1
+profiles:
+  - codeguard/csharp-all@1.2.0
+
+# The repository's own conventions rules (docs/package-conventions.md, "The conventions rules").
+# Since CLI 1.6.4 a rules directory declared here runs alongside the profile in one analysis, so
+# a plain `codecharter analyze` covers both rule sources and there is no second pass any more.
+# The path is relative to the repository root.
+rules:
+  - .codecharter/rules
+
+exclude:
+  # The template pack's content. These are `dotnet new` template *sources*, not projects: their
+  # package references are pinned to the literal `0.0.0-bsftversion` the pack substitutes at pack
+  # time, and their `.cs` files carry templating conditionals that only become valid C# once
+  # `dotnet new` has stripped them. They cannot restore, build or be analysed where they lie, and
+  # they are not meant to be - what is analysed is the *generated* tree, which the Templates
+  # workflow holds to this same profile plus 100 % coverage for every parameter combination. See
+  # docs/templates.md.
+  - "templates/**"
+  # Samples are demonstrative production code and are analysed like src.
+  # Tests stay excluded: the csharp-all profile does not detect this repo's test
+  # projects, so its own test exemptions never fire. It reports ~1070 findings that
+  # are xUnit convention by design (async-naming on [Fact] methods,
+  # async-missing-cancellation-token, method-name-too-long and type-name-length on
+  # Method_Scenario_ExpectedResult names). Gating on those would force the suite to
+  # be renamed into something unreadable. Re-include this tree once the profile
+  # recognises test projects.
+  - "**/tests/**"
+
+ignore:
+  # The four CQRS contracts below are empty by necessity, not by accident, so the
+  # rule's prescribed refactoring (marker interface -> attribute, CA1040) is not
+  # merely undesirable here but impossible in C#.
+  #
+  # ICommand<TResult> and IQuery<TResult> carry a type argument that IMediator uses
+  # for overload selection and TResult inference; INotification is used as a generic
+  # constraint (`where TNotification : INotification`) in six places across
+  # IMediator, ICommandHandler, IQueryHandler, INotificationHandler and Mediator.
+  # An attribute cannot carry a type argument and cannot constrain a generic
+  # parameter. Adding a member instead would break every request record in every
+  # consuming application.
+  #
+  # Scoped to these four exact types. Do not widen this to the rule as a whole:
+  # every other empty interface in the repo was genuinely fixed or deleted.
+  #
+  # `match` is compared against the FULL entity name, not the simple name the
+  # generated JSON Schema describes. A simple name here silently matches nothing.
+  - { rule: empty-interface, match: "Bsft.Mediator.ICommand" }
+  - { rule: empty-interface, match: "Bsft.Mediator.ICommand<TResult>" }
+  - { rule: empty-interface, match: "Bsft.Mediator.IQuery<TResult>" }
+  - { rule: empty-interface, match: "Bsft.Mediator.INotification" }
+
+  # IInternalIntegrationEvent marks a framework-internal transport event so the webhook
+  # fan-out can skip it (`event is IInternalIntegrationEvent`) while it still rides the
+  # outbox and consumer machinery. It is empty by necessity: it must be a *subtype* of
+  # IIntegrationEvent so a marked event flows through the existing open-generic handler
+  # registration and the `where TEvent : IIntegrationEvent` constraint unchanged, and so
+  # the fan-out can detect it by assignment. An attribute — the rule's prescribed CA1040
+  # refactoring — is neither assignable nor usable as a generic constraint, so it cannot
+  # carry this role. Same reasoning as IEFCoreSagaStore below, and scoped to this one type.
+  - { rule: empty-interface, match: "Bsft.Messaging.IInternalIntegrationEvent" }
+
+
+  # namespace-distance measures Robert Martin's distance from the main sequence per
+  # namespace. It is only evaluated by the full CLI run, not by the per-file
+  # analysis, which is why it is easy to miss.
+  #
+  # The namespaces below are stable concrete layers: exception types, value
+  # objects and records, entities, and small single-purpose utilities. That is
+  # exactly the case the rule's own recommendation names as a legitimate
+  # per-namespace exclusion. The only way to move the metric is to add abstract
+  # types nobody consumes or delete ones that are used, which changes the number
+  # without improving the design.
+  #
+  # Listed one by one on purpose. If a namespace grows real behaviour, remove its
+  # line and take the finding seriously rather than widening this to the rule.
+  #
+  # 2.0.0 (ADR-0013) replaced the role namespaces (.Models, .Exceptions, .Stores, ...)
+  # with feature namespaces. Entries whose namespace no longer exists were removed;
+  # where the stable types of one moved together into a package root, the entry moved
+  # with them. Some justification paragraphs below still name the 1.x namespace they
+  # were written for. Package roots that the new layout makes stable and concrete for
+  # the first time (the shared vocabulary of ADR-0013, rule 3) are deliberately not
+  # exempted here: they are reported until each one has been reviewed on its own.
+  - { rule: namespace-distance, match: "Bsft.Core" }
+  - { rule: namespace-distance, match: "Bsft.Data.MultiTenancy" }
+  - { rule: namespace-distance, match: "Bsft.Data.Contracts.Pagination" }
+  # The filter AST. 1.3.5 gave Bsft.Data.Contracts its own namespace root, so both
+  # this entry and the pagination one above name Bsft.Data.Contracts.* rather than
+  # the Bsft.Data.* namespaces the two assemblies used to share; the implementation
+  # halves left behind in Bsft.Data no longer trip the rule, because the compiler,
+  # the executors and the configuration types that joined them are the outgoing
+  # edges those namespaces previously lacked. The AST itself is unchanged: five
+  # concrete types with no
+  # outgoing edges — a serialization vocabulary a client deserialises into, with
+  # the compiler that consumes it left behind in Bsft.Data. FilterNode is a
+  # concrete base class on purpose, because System.Text.Json polymorphism binds
+  # [JsonDerivedType] to it; making it abstract to move the metric would change
+  # the wire contract, and the alternative — an interface nobody implements twice
+  # — is the "abstract types with no concrete consumers" the rule itself warns
+  # against.
+  - { rule: namespace-distance, match: "Bsft.Data.Contracts.Filtering" }
+  - { rule: namespace-distance, match: "Bsft.Mapping" }
+  - { rule: namespace-distance, match: "Bsft.Modules" }
+  - { rule: namespace-distance, match: "Bsft.Hosting.HealthChecks" }
+  - { rule: namespace-distance, match: "Bsft.Hosting.Logging" }
+  # The two hosting feature namespaces the 1.3.5 options work pushed over the line, for
+  # the reason their two siblings above are already listed: each is a small, stable,
+  # concrete sub-feature — an options type, its validator, and the two extension classes
+  # that register and mount it — with nothing in it a second implementation would ever
+  # replace. The rule's only lever here is to put an interface in front of a settings
+  # bag, which is what IOptions<> already is.
+  # The two localization package roots, and the first use of the exemption the conventions
+  # themselves sanction for a consolidated root: after the 1.3.5 split each root holds only
+  # the wiring — the extension classes, the defaults class, the options pair from the
+  # structural Options/ folder, and for the EfCore package its DbContext interface, entity
+  # and configuration — while every feature namespace in the package depends on it. That
+  # pins abstractness near zero and instability low by construction.
+  - { rule: namespace-distance, match: "Bsft.Localization" }
+  - { rule: namespace-distance, match: "Bsft.Localization.EFCore" }
+  - { rule: namespace-distance, match: "Bsft.Hosting.Cors" }
+  # Bsft.Hosting.BackgroundWork, the fifth hosting feature namespace and the same shape as the four
+  # above: an options type, its validator, the extension class that registers it, and two types a host
+  # derives from or calls — a base class and a set of extension methods on IServiceScopeFactory. The
+  # abstractness the rule wants is already there as far as it can be (the base class is abstract and
+  # designed for inheritance); the rest is a scope helper, and an interface in front of
+  # IServiceScopeFactory would be an abstraction over an abstraction.
+  - { rule: namespace-distance, match: "Bsft.Hosting.BackgroundWork" }
+  - { rule: namespace-distance, match: "Bsft.Hosting.Https" }
+  - { rule: namespace-distance, match: "Bsft.Correlation" }
+  - { rule: namespace-distance, match: "Bsft.Logging" }
+  - { rule: namespace-distance, match: "Bsft.Instrumentation" }
+  - { rule: namespace-distance, match: "Bsft.Resilience" }
+  # Bsft.Resilience.Mediator is the same shape as the root above and the other behavior
+  # packages: one behavior, its marker attribute, the pipeline provider behind a single
+  # seam, the options pair from the structural Options/ folder and the extension class.
+  # Everything in it is concrete by construction and the package is a leaf a host
+  # references to switch the concern on, so the only lever the rule offers is an
+  # interface in front of an attribute.
+  - { rule: namespace-distance, match: "Bsft.Resilience.Mediator" }
+  # Bsft.Http.Egress is the consolidated-root shape the conventions sanction, exactly as the
+  # localization roots above: the root holds only the wiring — the two extension classes and
+  # the options pair from the structural Options/ folder — while Abstractions/, Services/,
+  # Handlers/, Validation/ and Exceptions/ all depend on it. That pins abstractness near zero
+  # by construction, and the contracts a second implementation would replace are in
+  # Bsft.Http.Egress.Abstractions, which the rule measures separately and does not report.
+  - { rule: namespace-distance, match: "Bsft.Http.Egress" }
+  - { rule: namespace-distance, match: "Bsft.Calendar" }
+  # The HTTP conditional-GET primitives: four static classes of pure functions — the
+  # entity-tag grammar, the canonical content digest, the reading of If-None-Match and
+  # the writing of the validator plus its caching policy. It is stable because both
+  # endpoint packages depend on it, and concrete because there is nothing here to
+  # implement twice: a digest and a header comparison have one correct behaviour, and
+  # putting them behind an interface would make the caching policy of every endpoint
+  # substitutable at runtime, which is the opposite of what this package exists for.
+  - { rule: namespace-distance, match: "Bsft.Http" }
+
+  # Bsft.Hosting.BackgroundWork, the same conflict inside the one package the conventions let hold an
+  # extension class per feature folder: the folder names the feature, so the mandated name is
+  # BackgroundWorkServiceCollectionExtensions at 41. The escape used elsewhere — drop the family
+  # prefix the namespace carries — is already taken, because "Bsft.Hosting" is not in the name.
+  - { rule: type-name-length, match: "Bsft.Hosting.DependencyInjection.BackgroundWorkServiceCollectionExtensions" }
+  # Bsft.Idempotency.EFCore, the same conflict as the two above and checked against the same escape.
+  # IdempotencyEfCore is 17 characters before the mandated 26-character suffix, so the conforming
+  # name lands at 43. Dropping the family prefix the namespace carries is not available: the short
+  # name would be EfCoreServiceCollectionExtensions, which names no feature at all and would read as
+  # the entry point of every EfCore satellite a host references alongside this one. The main package
+  # needs no entry here — IdempotencyServiceCollectionExtensions is 37 and
+  # IdempotencyApplicationBuilderExtensions is 38.
+  - { rule: type-name-length, match: "Bsft.Idempotency.EFCore.DependencyInjection.IdempotencyEFCoreServiceCollectionExtensions" }
+
+
+  # --- type-name-length on the batch-D entry points, same conflict ---------------
+  # The nine below are the rest of that conflict, and each was checked against the
+  # escape the two above did not have: dropping the family prefix the namespace
+  # already carries. It is not available here, because the short name is taken.
+  # Bsft.Caching.EventAggregator, Bsft.Mediator.EventAggregator and
+  # Bsft.EventAggregator.Saga.Correlation would all have to ship
+  # EventAggregatorServiceCollectionExtensions or CorrelationServiceCollectionExtensions,
+  # names that Bsft.EventAggregator and Bsft.Correlation own — two packages a host
+  # references together, so the collision would be in its `using` set, not merely in
+  # this file. Qualifying with the family is what makes them unambiguous, and it is
+  # what pushes them over 40. The same holds for the Correlation and EfCore
+  # satellites of Messaging, Scheduling and Saga: Correlation is 11 characters and
+  # EfCore 6 before the 26-character suffix starts.
+  - { rule: type-name-length, match: "Bsft.Caching.EventAggregator.DependencyInjection.CachingEventAggregatorServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.EventAggregator.DependencyInjection.EventAggregatorServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.EventAggregator.Saga.Correlation.DependencyInjection.SagaCorrelationApplicationBuilderExtensions" }
+  - { rule: type-name-length, match: "Bsft.EventAggregator.Saga.Correlation.DependencyInjection.SagaCorrelationServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.Mediator.EventAggregator.DependencyInjection.MediatorEventAggregatorServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.Messaging.Correlation.DependencyInjection.MessagingCorrelationServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.Messaging.EFCore.DependencyInjection.MessagingEFCoreServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.Scheduling.Correlation.DependencyInjection.SchedulingCorrelationServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.Scheduling.EFCore.DependencyInjection.SchedulingEFCoreServiceCollectionExtensions" }
+
+  # --- type-name-length on the correlation outbound entry point, same conflict ----
+  # Bsft.Correlation.Http ships the client-safe outbound handler. Its entry point lands
+  # at 42 characters, and the usual escape - dropping the family prefix the namespace
+  # already carries - is not available: HttpServiceCollectionExtensions reads as the
+  # entry point of Bsft.Http, a package a host references alongside this one, and
+  # Bsft.Http would be the one entitled to the name. Qualifying with the family is what
+  # makes it unambiguous and what pushes it over 40.
+  - { rule: type-name-length, match: "Bsft.Correlation.Http.DependencyInjection.CorrelationHttpServiceCollectionExtensions" }
+
+  # --- namespace-distance on four more consolidated package roots ----------------
+  # The same structural consequence as Bsft.Storage and Bsft.Webhooks above, in the
+  # four namespaces batch D left in that position.
+  #
+  # Bsft.Caching, Bsft.Messaging.EFCore and Bsft.Messaging.RabbitMQ are package-root
+  # namespaces that now hold the DI entry point, the options and their validators
+  # (Options/ is structural) and nothing else, while Services/, Stores/ and the rest
+  # depend on them. Bsft.EventAggregator.Saga.Timeouts is the same shape one level
+  # down: after Timeouts/Abstractions/, Timeouts/Services/ and Timeouts/Stores/ were
+  # split out, what is left in it is SagaTimeoutOptions, its catch-up enum and the
+  # Internal/ types, all concrete and all depended upon.
+  #
+  # The only ways to move the metric are to invent abstractions nobody consumes or to
+  # fold the sub-namespaces back into the root and undo the layout the conventions
+  # require. Neither improves the design.
+  - { rule: namespace-distance, match: "Bsft.Caching" }
+  - { rule: namespace-distance, match: "Bsft.EventAggregator.Saga.Timeouts" }
+  - { rule: namespace-distance, match: "Bsft.Messaging.RabbitMQ" }
+  # Bsft.Messaging.EFCore.Postgres is the same consolidated-root shape as the two above, and
+  # arrives at it the same way: the root holds the DI entry point, the defaults class, and the
+  # options pair and the LISTEN statement builder from the structural Options/ and Internal/
+  # folders, while Abstractions/ and Services/ depend on it because the options are what they are
+  # configured by. Both seams the package declares are already interfaces and already live in
+  # Abstractions/; the rule's remaining lever is an interface over an options class or over a
+  # constants class, which is the fix these entries exist to refuse.
+  - { rule: namespace-distance, match: "Bsft.Messaging.EFCore.Postgres" }
+  - { rule: namespace-distance, match: "Bsft.Testing.Contexts" }
+  # The six records a test hands the fake OIDC authority: the user, the token policy,
+  # the three request shapes and the logout-token defect. Zero abstractness by
+  # definition and stable because the whole Web feature depends on them — the same
+  # value-object namespace case as Bsft.Testing.Contexts directly above and
+  # Bsft.Data.Pagination further up. It appeared in 1.3.5 when the Web feature folder
+  # was given the section-2 vocabulary and the records moved out of the flat root.
+  - { rule: namespace-distance, match: "Bsft.Testing.Web.Oidc" }
+  - { rule: namespace-distance, match: "Bsft.Testing.Web.Push" }
+
+
+# The 1.3.5 consolidation moved the seams and the records they are written in terms of into the
+# package's Abstractions/ folder, so the entry above is re-scoped rather than widened: the concrete
+# half that pushes the metric is now Bsft.Auth.Oidc.Abstractions, while the package root holds the
+# wiring and the options and is expected to stay near the sequence.
+
+# Everything below is scoped to a single file, because generic-exception-catch
+# reports every site under the same entity name, "catch (System.Exception)", so an
+# entity-name filter cannot distinguish one catch from another. A stale entry in an
+# earlier version of this file tried exactly that and silently matched nothing.
+  # --- namespace-distance: the authority-session contracts ----------------------
+  # The same stable-concrete-layer case already recorded for Bsft.Security.Abstractions,
+  # Bsft.Connectors.Abstractions and Bsft.Webhooks.Abstractions above: interfaces plus
+  # the value objects, records and enums they are written in terms of. What pushes the
+  # metric is the concrete half - AuthoritySessionRecord, LogoutDelivery,
+  # SessionClientLink, the audit event and the five enums - and it is concrete on
+  # purpose. AuthoritySessionRecord travels both ways through the store and owns the
+  # one liveness predicate in the design; the enums exist so that no caller passes a
+  # raw string. Every store, sink and window in the namespace is already an interface.
+  # Moving the number would mean abstracting records nobody would implement twice.
+  # Since 2.0.0 the contracts share the namespace Bsft.Auth.TokenServer.Sessions with the
+  # implementation, so its entry in the consolidated token-server block below covers both halves.
+
+
+  # --- type-name-length: the instrumentation registration -----------------------
+  # The fourth instance of the same category. The feature is the package —
+  # Bsft.Instrumentation — so section 4 fixes the name as
+  # InstrumentationServiceCollectionExtensions, forty-two characters, of which the
+  # mandated suffix alone is twenty-six. The rule's prescribed fix, splitting the
+  # type along its responsibilities, does not apply to a class with one
+  # registration method.
+  - { rule: type-name-length, match: "Bsft.Instrumentation.DependencyInjection.InstrumentationServiceCollectionExtensions" }
+
+  # The same shape once more, for two of the three behavior packages of 1.3.8: the feature
+  # token is the package name (<Concern>Mediator) and the suffix is section 4's, so the
+  # shortest conforming name is the one that is here. Bsft.Auth.Mediator's fits and is
+  # therefore absent.
+  - { rule: type-name-length, match: "Bsft.Caching.Mediator.DependencyInjection.CachingMediatorServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.Resilience.Mediator.DependencyInjection.ResilienceMediatorServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.Localization.DependencyInjection.LocalizationEndpointRouteBuilderExtensions" }
+  - { rule: type-name-length, match: "Bsft.Localization.EFCore.DependencyInjection.LocalizationEFCoreServiceCollectionExtensions" }
+
+
+  # --- the billing family ------------------------------------------------------------
+  # Four classes of finding, each already recorded verbatim for an earlier package. Every entry
+  # below was checked against the escape those earlier blocks use - rename the thing - before
+  # being listed, and each rename was rejected for a reason stated here.
+
+
+  # 6. (retired in 2.0) try-method-returns-bool on LenientJsonReader.TryExtract: the 2.0 naming rules
+  #    renamed the method to ExtractOrDefault, which says "null rather than throwing" without the Try
+  #    prefix, so the rule no longer applies and the exemption was dropped.
+
+
+  - { rule: high-afferent-coupling, match: "Bsft.Data.MultiTenancy.ITenantContext" }
+  - { rule: high-afferent-coupling, match: "Bsft.Instrumentation.IInstrumentationSourceProvider" }
+  # PagedRequest and IEventAggregator crossed the threshold only when the chat and AI families
+  # met on this branch: each family alone stayed under it, and the union of their consumers is
+  # what the count now sees. They are the same two shapes as the entries above - PagedRequest is
+  # the framework's pagination vocabulary record (every list endpoint states it, an interface
+  # over it would trade equality semantics for indirection nobody dispatches on), and
+  # IEventAggregator already is the abstraction the rule asks for: a small, stable, tested
+  # contract whose surface has not changed shape since it shipped.
+  - { rule: high-afferent-coupling, match: "Bsft.Data.Contracts.Pagination.PagedRequest" }
+  - { rule: high-afferent-coupling, match: "Bsft.EventAggregator.IEventAggregator" }
+  # --- the three findings the 1.5.x engine update surfaced ----------------------
+  # Bsft.Auth.Factors.Methods holds the method-descriptor value types the factor
+  # registry hands out: concrete, immutable shapes that are the contract, the same reading this
+  # file records for the event-contract namespaces above. Their consumers arrive through the
+  # factor registration edges the graph model does not capture.
+  # IPollReporter and ICommand<TResult> already are the abstraction the rule asks for.
+  # IPollReporter is the polling family's one report seam and every poller depends on it by
+  # design; ICommand<TResult> is a CQRS marker (see the empty-interface block at the top of this
+  # file) whose whole purpose is to be implemented by every command in the tree - maximum fan-in
+  # is the contract working, not a defect. The rule's own guidance for interfaces - lock the
+  # surface, keep tests, avoid breaking changes - is the standing state of both.
+  - { rule: high-afferent-coupling, match: "Bsft.Core.Polling.IPollReporter" }
+  - { rule: high-afferent-coupling, match: "Bsft.Mediator.ICommand<TResult>" }
+
+
+  - { rule: record-with-mutable-collection-member, match: "Bsft.Idempotency.IdempotencyResponseSnapshot" }
+
+  # service-provider-injected-into-service: the sites below take IServiceProvider
+  # because the type they need is only known at runtime, or because the provider is part of
+  # the contract they publish. The rule's prescribed fix — declare the dependency — cannot
+  # be applied to a dependency that has no name until the call is made, and wrapping
+  # GetRequiredService in a hand-written resolver interface would be the same service
+  # locator with the indirection hidden, which is worse than saying so here.
+  #
+  # Every other site the rule found was genuinely fixed: the three startup validators now
+  # take IServiceScopeFactory, and SagaStepCommitter and SagaFlowHost declare the five to
+  # seven services they used to pull out of the provider one by one.
+  #
+  # Runtime dispatch on a type composed per request:
+  - { rule: service-provider-injected-into-service, match: "Bsft.Mediator.DefaultMediator" }
+  - { rule: service-provider-injected-into-service, match: "Bsft.Mediator.Transactions.TransactionBehavior<TRequest, TResponse>" }
+  - { rule: service-provider-injected-into-service, match: "Bsft.Mediator.StartupValidation.MediatorStartupValidator" }
+  # The provider is the published contract. A saga step and a tenant role resolver are
+  # host-written delegates that receive the scope's provider by design; taking it away would
+  # be a breaking change to the extension point, not a decoupling.
+  - { rule: service-provider-injected-into-service, match: "Bsft.EventAggregator.Saga.Execution.SagaContext<TState>" }
+  - { rule: service-provider-injected-into-service, match: "Bsft.EventAggregator.Saga.Execution.SagaEngine" }
+  # The two test harnesses take a container and own it: disposing the harness disposes the
+  # provider it was handed, which is the point of the type and is documented on both
+  # constructors. That is an ownership relationship, not a lookup, and a scope factory cannot
+  # express it because it gives no handle on the root to dispose.
+  - { rule: service-provider-injected-into-service, match: "Bsft.Testing.Mediation.MediatorTestHarness" }
+  - { rule: service-provider-injected-into-service, match: "Bsft.Testing.Sagas.SagaTestHarness" }
+
+  # too-many-ctor-params on the two saga types is the direct consequence of fixing
+  # service-provider-injected-into-service on them, and the two rules cannot both be
+  # satisfied here. SagaStepCommitter coordinates five collaborators to make one commit
+  # atomic - the store, the timeout scheduler, the persistence window, the instance registry
+  # and telemetry - and SagaFlowHost adds the engine, the builder factory and the step scope
+  # factory on top. The only ways to get under the threshold are a service locator, which is
+  # what was just removed, or a parameter object that groups unrelated collaborators purely
+  # by arity, which this repository does not allow. Five and seven named dependencies say
+  # honestly what these types need. Scoped to these two.
+  - { rule: too-many-ctor-params, match: "Bsft.EventAggregator.Saga.Persistence.SagaStepCommitter" }
+  - { rule: too-many-ctor-params, match: "Bsft.EventAggregator.Saga.Execution.SagaFlowHost" }
+
+  # hosting-iconfiguration-injected-below-composition-root on ConfigurationValidator.
+  # Raw configuration is this type's subject matter, not an incidental dependency: it exists
+  # to walk whatever keys the ConnectionStrings section happens to contain and report the
+  # empty ones, and it runs once at start-up as part of the host's own validation pass. The
+  # rule's prescribed fix, bind a typed options record and inject IOptions<T>, cannot express
+  # "every child of this section, whatever it is called" without a settable dictionary, which
+  # would only move the problem to the mutable-collection rules. Scoped to this one type.
+  - { rule: hosting-iconfiguration-injected-below-composition-root, match: "Bsft.Hosting.StartupValidation.ConfigurationValidator" }
+
+  - { rule: primitive-in-constructor, match: "Bsft.Testing.Web.Push.FakePushService" }
+
+
+  - { rule: cancellation-token-not-last-parameter, match: "Bsft.Messaging.RabbitMQ.Consuming.RabbitMQMessageConsumer.SubscribeAsync" }
+
+  - { rule: sync-over-async, match: "Bsft.EventAggregator.IEventAggregator.Publish" }
+  - { rule: sync-over-async, match: "Bsft.Modules.DependencyInjection.ModulesApplicationBuilderExtensions.UseBsftModules" }
+  - { rule: sync-over-async, match: "Program.SeedWebhookSubscription" }
+
+  - { rule: record-output-naming, match: "Bsft.Localization.ITranslationBundleReader.ResolveBundle" }
+
+  - { rule: record-no-public-methods, match: "Bsft.Http.Egress.OutboundAddressDecision" }
+
+
+  # Bsft.Mediator is the same root with a different configuration type: in place of an options
+  # class it holds MediatorConfiguration, the same code-only configuration shape section 4 lists for
+  # Bsft.Mapping's MappingConfiguration and Bsft.Modules' ModulesConfiguration (assemblies to scan,
+  # behaviour types), whose roots are exempted above for the same reason. Everything else in the
+  # namespace is the DI entry point, the defaults and the structural Internal/ and Diagnostics/
+  # folders. MediatorConfiguration is filled once by the AddBsftMediator action and read by the
+  # registration code; an interface over it would be a second configuration shape nobody implements.
+  - { rule: namespace-distance, match: "Bsft.Mediator" }
+
+
+  - { rule: type-name-length, match: "Bsft.Data.Postgres.PostgresFullTextMigrationBuilderExtensions" }
+  - { rule: type-name-length, match: "Bsft.Data.SqlServer.SqlServerFullTextMigrationBuilderExtensions" }
+
+
+scopes:
+
+  # --- security-sql-injection: the LISTEN statement -----------------------------
+  # CA2100 flags the LISTEN command, which is built by concatenation because LISTEN
+  # takes an identifier and no provider parameterises one; the write side sends its
+  # half through pg_notify precisely because that call does take the channel as a
+  # parameter. The name is quoted, and it is constrained to lower-case letters,
+  # digits and underscores by PostgresListenStatement, which owns that grammar,
+  # guards its own For() with it and is what BsftMessagingPostgresOptionsValidator
+  # calls at start-up. No character is left in the alphabet that could end the quoted
+  # identifier early. CA2100 is a taint analysis and cannot see a guard that throws,
+  # so the finding stands however the check is arranged.
+  - match:
+      - "src/Bsft.Messaging.EFCore.Postgres/PostgresOutboxNotificationChannel.cs"
+    ignore:
+      - { rule: security-sql-injection }
+
+  # --- generic-exception-catch: log and rethrow ---------------------------------
+  # These five do precisely what the rule's own recommendation prescribes for a
+  # legitimate boundary: log the failure and rethrow it with a bare `throw;` so the
+  # stack trace survives. Nothing is swallowed. The rule body cannot see that: it is
+  # `AllBodies.SelectMany(m => m.Catches.Where(c => c.ExceptionType.FullName ==
+  # "System.Exception"))` with no rethrow exemption, so it flags the shape the
+  # recommendation asks for. Reported upstream against codeguard/csharp-all.
+  - match:
+      - "src/Bsft.EventAggregator.Saga/Timeouts/SagaTimeoutScheduler.cs"
+      - "src/Bsft.Mediator/LoggingBehavior.cs"
+      - "src/Bsft.Mediator/TracingBehavior.cs"
+      # RedeemingSingleUseTokenSigner counts and logs a redemption-store failure and
+      # rethrows it unchanged. The counter is the whole point: "the redemption
+      # database is down" and "tokens are being replayed" produce identical symptoms
+      # at the endpoint and need opposite responses. It must not be narrowed and must
+      # not swallow — a token whose reservation did not commit must never be handed
+      # out, because it could never be redeemed. The store is behind an interface an
+      # application may implement over any provider, so this assembly cannot name the
+      # exception types it throws. Cancellation is kept separate by the
+      # `when (ex is not OperationCanceledException)` filter on both catches.
+    ignore:
+      - { rule: generic-exception-catch }
+
+
+  # --- generic-exception-catch: subscriber isolation ----------------------------
+  # A handler is arbitrary consumer code, so the fan-out cannot know which exception
+  # types to expect and must not let one subscriber stop the others. Nothing is
+  # swallowed: every failure is collected and rethrown together in an
+  # AggregateException once the loop finishes. Narrowing the catch would silently
+  # drop the failures of every handler after the first.
+  - match:
+      - "src/Bsft.EventAggregator/SimpleEventAggregator.cs"
+      - "src/Bsft.Mediator/DefaultMediator.cs"
+    ignore:
+      - { rule: generic-exception-catch }
+
+
+  # --- generic-exception-catch: resilience boundaries ---------------------------
+  # Long-running hosts and a top-level middleware. The outbox and timeout loops must
+  # survive a transient failure of a store or a sink and retry on the next pass, and
+  # the middleware exists to turn any unhandled exception into an RFC 9457 response.
+  # All of them keep cancellation separate: OperationCanceledException is either
+  # filtered out of the catch or handled by its own preceding clause. Each of these
+  # is pinned by tests that assert the loop keeps running after a failing pass.
+  #
+  # PollLoop is the same boundary one level up, and the widest of them: the pass is a
+  # delegate its caller wrote, so this assembly cannot know what it throws, and the
+  # type's whole contract is that a pass may fail in any way it likes without ending
+  # the service. The catch is what makes that true for a pass that throws before it
+  # returns a task at all. Nothing is swallowed — the failure goes to the reporter
+  # exactly as a faulted pass does, and a preceding clause keeps cancellation apart.
+  #
+  # ExternalServiceHealthCheck belongs to the same group for a security reason: it
+  # is a sanitising boundary. Narrowing its catch was tried and reverted, because
+  # anything that escapes is caught by HealthCheckService instead, which builds the
+  # report entry from the raw exception message rather than the fixed sentence the
+  # check returns.
+  - match:
+      - "src/Bsft.Core/Polling/PollLoop.cs"
+      - "src/Bsft.EventAggregator.Saga/Timeouts/SagaTimeoutDispatcher.cs"
+      - "src/Bsft.Hosting/BsftExceptionMiddleware.cs"
+      - "src/Bsft.Hosting/HealthChecks/ExternalServiceHealthCheck.cs"
+    ignore:
+      - { rule: generic-exception-catch }
+
+  # --- generic-exception-catch: the cache is an optimisation --------------------
+  # CachingBehavior degrades instead of failing when the store is unavailable: an
+  # unreadable store is treated as a miss so the handler runs, and an unwritable one
+  # leaves the handler's result on its way to the caller. The store is arbitrary
+  # infrastructure — a Redis client raises its own connection type, which this
+  # assembly cannot reference, so there is no narrower set to catch. Nothing is
+  # swallowed silently: both sites log the failure at warning level.
+  #
+  # Cancellation is kept separate by a preceding `catch (OperationCanceledException)
+  # when (ct.IsCancellationRequested) { throw; }` at both sites, so a cancelled
+  # caller still sees its cancellation rather than a degraded pass-through. Both
+  # paths are pinned by tests that assert a failing store still answers the query.
+  - match: "src/Bsft.Caching.Mediator/CachingBehavior.cs"
+    ignore:
+      - { rule: generic-exception-catch }
+
+  # --- generic-exception-catch: the compensation must not replace the failure ---
+  # EFCoreInboxStore.AbandonAsync runs on the failure path of a delivery that is
+  # already unwinding, and the caller abandons in a finally. Its compensating delete
+  # removes an inbox mark a handler's own SaveChanges had committed; if that delete
+  # fails, rethrowing - the rule's prescribed remedy - would replace the handler
+  # failure that explains the delivery with a database error that explains only the
+  # cleanup, and would change nothing else, because the delivery fails either way.
+  #
+  # There is also no narrower set to catch. ExecuteDelete surfaces the provider's own
+  # exception type, and this package references EF Core only, never a provider, which
+  # is the same reason CachingBehavior above cannot name Redis's.
+  #
+  # Nothing is swallowed silently: the failure is logged at error level with the
+  # event id, the consumer and the sentence that says what it means - every
+  # redelivery of that event is now acknowledged as a duplicate until the row is
+  # deleted by hand. Pinned by a test that drops the table and asserts both the
+  # report and that the abandon does not throw.
+  - match: "src/Bsft.Messaging.EFCore/Inbox/EFCoreInboxStore.cs"
+    ignore:
+      - { rule: generic-exception-catch }
+
+  # --- missing-xml-doc on an indexer (profile bug) ------------------------------
+  # BsftStringLocalizer's two indexers are fully documented, but the rule reports
+  # them at the class declaration line and cannot resolve an indexer's doc trivia.
+  # There is no form of documentation that satisfies it. Reported upstream.
+  # The trailing "[]" of the indexer's entity name would be read as an empty glob
+  # character class, so the tail is matched with a wildcard instead.
+  - match: "src/Bsft.Localization/BsftStringLocalizer.cs"
+    ignore:
+      - { rule: missing-xml-doc, match: "Bsft.Localization.BsftStringLocalizer.this*" }
+
+
+  # --- logic-class-without-interface on Mediator (profile bug) ------------------
+  # The rule requires `t.ImplementedInterfaces.Count == 0`. Mediator implements
+  # IMediator, but the interface is declared in Bsft.Mediator.Abstractions and the
+  # analyzer does not resolve interfaces across project boundaries. Same-project
+  # implementors of the same interfaces are correctly not flagged. Reported upstream.
+  - match: "src/Bsft.Mediator/DefaultMediator.cs"
+    ignore:
+      - { rule: logic-class-without-interface, match: "Bsft.Mediator.DefaultMediator" }
+
+  # --- IEFCoreSagaStore ---------------------------------------------------------
+  # An empty marker interface that exists so consumers can resolve the EF Core saga
+  # store specifically. It was deleted here as dead code, then restored: the saga
+  # persistence-window work now depends on it, so EFCoreSagaStore implements it and
+  # the type is part of that package's public surface. An attribute cannot be a DI
+  # registration key, so the rule's prescribed refactoring does not apply.
+  - match: "src/Bsft.EventAggregator.Saga.EFCore/IEFCoreSagaStore.cs"
+    ignore:
+      - { rule: empty-interface, match: "Bsft.EventAggregator.Saga.EFCore.IEFCoreSagaStore" }
+
+
+  # --- generic-exception-catch: two platform spellings of one refusal -----------
+  # These three catch `Exception` only in the syntax; the filter on each of them names
+  # exactly two concrete types, `CryptographicException or PlatformNotSupportedException`,
+  # and each translates them into one domain exception. Nothing broader is caught and
+  # nothing is swallowed.
+  #
+  # Both types are named because the platforms disagree about how a P-256 point that is
+  # not on the curve is refused: Linux raises CryptographicException from the import,
+  # while Windows raises PlatformNotSupportedException — "The specified curve 'nistP256'
+  # or its parameters are not valid for this platform" — wrapping that same
+  # CryptographicException. This is measured rather than assumed; it is what the tests
+  # for an off-curve subscription key and an off-curve VAPID key actually observe.
+  #
+  # It is one filtered clause rather than two typed ones for a reason that is also
+  # measured: with two clauses, exactly one is reachable per platform, and the coverage
+  # gate then reports the other as three permanently uncovered lines. The filter keeps
+  # the check honest and the region single.
+  #
+  # The rule body cannot see a filter — it is `Catches.Where(c => c.ExceptionType.FullName
+  # == "System.Exception")` — so it reports the shape regardless of how narrow the filter
+  # makes it, the same blind spot the rethrow entries above record. Scoped to these three
+  # files.
+  - match:
+      - "src/Bsft.Testing/Web/Push/VapidTokenReader.cs"
+    ignore:
+      - { rule: generic-exception-catch }
+
+
+  # --- generic-exception-catch: the classifier is the catch ---------------------
+  # The stream retry is classifier-driven by design: the caller supplies
+  # BsftResilienceStreamOptions.ShouldRetry and it decides, per exception, whether an
+  # attempt is worth repeating. The catch therefore cannot name a type — the stream
+  # comes from an arbitrary caller-supplied factory over an HTTP response, a model
+  # client or a database cursor, and narrowing it here would silently move the
+  # decision out of the caller's classifier and into this file, which is exactly the
+  # thing the API exists to avoid. Nothing is swallowed: the failure is carried out of
+  # the attempt, offered to the classifier, and rethrown through
+  # ExceptionDispatchInfo with its stack intact the moment the classifier or the
+  # budget says no. Cancellation is excluded by the `when (failure is not
+  # OperationCanceledException)` filter, so a cancelled enumeration still ends at once.
+  # Scoped to the one file, because the rule reports every site under the entity name
+  # "catch (System.Exception)".
+  - match: "src/Bsft.Resilience/ResilientStreamExtensions.cs"
+    ignore:
+      - { rule: generic-exception-catch }
+
+
+  # --- generic-exception-catch: reading a host's context at start-up -------------
+  # TenantInterceptorStartupValidator has to construct each registered DbContext to see whether it
+  # carries the save guard, and constructing one runs the host's own configuration callback and
+  # every constructor dependency it has. That is arbitrary host code written for request time, so
+  # what it throws is the host's business and there is no set of types to name. The catch does not
+  # swallow: it turns the failure into a warning that says the context could not be read, which is
+  # what keeps "unknown" from looking like "fine". A real cancellation is filtered out ahead of it.
+  - match:
+      - "src/Bsft.Data/MultiTenancy/TenantInterceptorStartupValidator.cs"
+    ignore:
+      - { rule: generic-exception-catch }
+
+
+  # --- generic-exception-catch: the startup-validation root boundary --------------
+  # StartupValidationHostedService.RunOneAsync is the one place framework-wide that turns whatever a
+  # host-authored IStartupValidator throws — including out of its own constructor's or ValidateAsync's
+  # resolution of scoped dependencies — into a StartupValidationResult.Failure naming that validator,
+  # rather than letting it crash the host outright. There is nothing further out to rethrow to: this
+  # is the boundary every other validator's own catch (see TemplateContractStartupValidator above)
+  # already assumes exists. A bare `throw;` here would defeat the type's entire purpose, which is
+  # exactly to keep one validator's bug from stopping every other registered validator from still
+  # running and being reported. Cancellation is filtered out ahead of it, so a genuinely cancelled
+  # start-up still stops.
+  - match:
+      - "src/Bsft.Hosting/StartupValidation/StartupValidationHostedService.cs"
+    ignore:
+      - { rule: generic-exception-catch }
+
+
+  # --- contracts-builder-contract: the two mapping configuration builders ---------
+  # ProfileBuilder and MapBuilder<TSource, TDest> do not build an object and are not meant to: they
+  # collect what a MappingProfileBase declares, and the registry reads that declaration back to
+  # resolve the model. There is no single output for a Build() to return - ProfileBuilder holds one
+  # entry per type pair, MapBuilder holds a set of member overrides and a set of ignores - so adding
+  # one would mean inventing a return type nothing asks for. The alternative the rule names, not
+  # using the suffix, is a rename of two public types that every host's profile is written against,
+  # and the suffix does describe what a caller does with them. Scoped to these two files.
+  - match:
+      - "src/Bsft.Mapping/ProfileBuilder.cs"
+      - "src/Bsft.Mapping/MapBuilder.cs"
+    ignore:
+      - { rule: contracts-builder-contract }
+
+  # --- string-concatenation: the diagnostics that do not fit on one line ---------
+  # Every site below assembles one sentence a person reads when something is refused: an exception
+  # message, a validation error, a log template. They are written as two or three interpolated
+  # segments because the sentence is longer than the line budget this repository holds itself to,
+  # not because anything is being built in a loop. The rule's premise is allocation pressure, and
+  # these run once per refusal on a path that is already throwing or logging. StringBuilder for a
+  # three-part sentence would cost more than the concatenation and read worse, and a raw string
+  # literal would put newlines into a message that has to stay one line in a log. `string-concat
+  # -in-loop` stays on everywhere, which is the case that actually costs something.
+  - match:
+      - "src/Bsft.Data/MultiTenancy/TenantInterceptorStartupValidator.cs"
+    ignore:
+      - { rule: string-concatenation }
+
+
+coverage:
+  # Test-project discovery walks the repository, not Bsft.sln, so it finds the three template
+  # source suites under templates/*/tests/. They are template sources rather than projects - their
+  # package references are pinned to the literal 0.0.0-bsftversion that the pack substitutes at
+  # pack time - so restoring them fails and the gate reports a failure that says nothing about this
+  # repository's coverage. Unlike the top-level exclude above, these directories are never walked.
+  #
+  # The generated trees are not let off: the Templates workflow runs this same gate at
+  # --min-coverage 100 against the output of every template and every parameter combination.
+  excluded-directories:
+    - "templates/**"

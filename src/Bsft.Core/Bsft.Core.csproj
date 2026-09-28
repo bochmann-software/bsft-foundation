@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework core: Exceptions, Validation, Unit type, closure calculator</Description>
+  </PropertyGroup>
+</Project>

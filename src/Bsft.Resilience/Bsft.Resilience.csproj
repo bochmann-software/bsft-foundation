@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework resilience (retry, circuit breaker, timeout) for HTTP clients, built on Polly. The mediator retry behavior ships in Bsft.Resilience.Mediator.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Bsft.Correlation.Http rather than Bsft.Correlation: the resilient client needs the outbound
+         handler and nothing else, and taking the client-safe package keeps the ASP.NET Core shared
+         framework of the correlation middleware out of this package's closure. -->
+    <ProjectReference Include="..\Bsft.Correlation.Http\Bsft.Correlation.Http.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Resilience.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
+    <PackageReference Include="Polly.Core" />
+  </ItemGroup>
+</Project>

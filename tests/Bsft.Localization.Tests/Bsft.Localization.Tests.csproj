@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bsft.Localization\Bsft.Localization.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Localization.EFCore\Bsft.Localization.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.EventAggregator\Bsft.EventAggregator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\en.translations.json" />
+    <EmbeddedResource Include="Resources\null.translations.json" />
+  </ItemGroup>
+</Project>

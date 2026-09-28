@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework idempotent unsafe endpoints: an Idempotency-Key header, a request fingerprint, replay of the first response and a pluggable record store</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Idempotency.Tests" />
+    <InternalsVisibleTo Include="Bsft.Idempotency.EFCore" />
+    <InternalsVisibleTo Include="Bsft.Idempotency.EFCore.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
+    <ProjectReference Include="..\Bsft.Data\Bsft.Data.csproj" />
+    <ProjectReference Include="..\Bsft.Http\Bsft.Http.csproj" />
+    <ProjectReference Include="..\Bsft.Instrumentation\Bsft.Instrumentation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+</Project>

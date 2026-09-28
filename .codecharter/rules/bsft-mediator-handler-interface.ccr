@@ -1,0 +1,12 @@
+@name "Mediator handler without its handler interface"
+@severity error
+@category "Architecture"
+@description "A class named *CommandHandler, *QueryHandler or *NotificationHandler must implement the matching contract from Bsft.Mediator.Abstractions, directly or through its base class. A handler the mediator cannot see is a request nobody answers, and the failure appears at the first dispatch rather than at build time."
+@recommendation "Implement ICommandHandler<TCommand>, ICommandHandler<TCommand, TResult>, IQueryHandler<TQuery, TResult> or INotificationHandler<TNotification>, or rename the class so it does not claim to be a handler. See docs/package-conventions.md section 4, 'Mediator messages and handlers'."
+
+from t in Types
+where t.Kind == "Class" && !t.IsAbstract && !t.IsStatic
+where t.Name.EndsWith("CommandHandler") || t.Name.EndsWith("QueryHandler") || t.Name.EndsWith("NotificationHandler")
+where !t.ImplementedInterfaces.Any(i => i.Name.StartsWith("ICommandHandler") || i.Name.StartsWith("IQueryHandler") || i.Name.StartsWith("INotificationHandler"))
+where t.BaseType == null || !t.BaseType.ImplementedInterfaces.Any(i => i.Name.StartsWith("ICommandHandler") || i.Name.StartsWith("IQueryHandler") || i.Name.StartsWith("INotificationHandler"))
+select t

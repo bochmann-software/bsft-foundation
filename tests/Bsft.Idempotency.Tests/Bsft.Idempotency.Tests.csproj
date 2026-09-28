@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bsft.Idempotency\Bsft.Idempotency.csproj" />
+    <!-- BsftExceptionMiddleware. The acceptance walkthrough for the pipeline order asserts that the
+         428 and the 409 this package raises reach the client as problem documents, which is only
+         true when the framework's exception middleware is outside it. -->
+    <ProjectReference Include="..\..\src\Bsft.Hosting\Bsft.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <!-- Carries Microsoft.AspNetCore.TestHost, which is what UseTestServer() needs. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+
+</Project>

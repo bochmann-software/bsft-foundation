@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework job scheduling: recurring (cron/interval) and delayed background jobs on a leased, durable dispatcher</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Scheduling.EFCore" />
+    <InternalsVisibleTo Include="Bsft.Scheduling.Correlation" />
+    <InternalsVisibleTo Include="Bsft.Scheduling.Tests" />
+    <InternalsVisibleTo Include="Bsft.Scheduling.EFCore.Tests" />
+    <InternalsVisibleTo Include="Bsft.Scheduling.Correlation.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
+
+    <!-- The reading contracts speak the shared paging vocabulary rather than a second one of their
+         own. This package's dependency closure is empty, so it stays a contract reference. -->
+    <ProjectReference Include="..\Bsft.Data.Contracts\Bsft.Data.Contracts.csproj" />
+    <ProjectReference Include="..\Bsft.Instrumentation\Bsft.Instrumentation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <!-- Both halves, for the reason Bsft.Security records: IHealthCheck and HealthCheckRegistration
+         live in the abstractions, but HealthCheckServiceOptions - the only way to contribute a
+         registration without calling AddHealthChecks() and so forcing it on every host - does not. -->
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+</Project>
