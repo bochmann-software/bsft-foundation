@@ -3,10 +3,9 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
 
-  <!-- The two version lines that follow the target framework. net8.0 keeps the lines it has always
-       been built against, so a net8.0 consumer's dependency graph does not move. net10.0, which only
-       the Foundation packages and their test projects target (Directory.Build.props), takes the
-       10.0.x line of both:
+  <!-- The version lines that follow the target framework. net8.0 keeps the lines it has always been
+       built against, so a net8.0 consumer's dependency graph does not move. net10.0, which every
+       package and its test project targets (Directory.Build.props), takes the 10.0.x line of each:
 
        - BsftRuntimePackageVersion, the Microsoft.Extensions.* group, System.Diagnostics.DiagnosticSource
          and System.Threading.RateLimiting. OpenTelemetry 1.15 depends on Microsoft.Extensions.* 10.0.0
@@ -16,16 +15,41 @@
          8.0.x brings a TestHost whose response PipeWriter does not implement UnflushedBytes, which the
          ASP.NET Core 10 JSON writer requires: every JSON endpoint answers 500 under the 8.0.x test host
          on the 10.0 shared framework.
+       - BsftEfCorePackageVersion and BsftNpgsqlEfCorePackageVersion, the EF Core group below. EF Core 9
+         runs on net10.0, but a net10.0 host takes EF Core 10, and EF Core 10 changed the shape of
+         ExecuteUpdateAsync (SetProperty takes a delegate instead of an expression tree): an assembly
+         compiled against EF Core 9 fails there with MissingMethodException. The net10.0 asset of every
+         package is therefore compiled against the EF Core line a net10.0 host runs.
+       - The packages that version independently but depend on one of the lines above take a 10.x
+         version on net10.0 where their 9.x or 8.x build would be a downgrade there (NU1605); each
+         says so where it is pinned.
 
        The inner build of each framework sets TargetFramework as a global property, so the condition
-       sees it. EF Core stays on 9.0.19 for both frameworks: it runs on net10.0, and EF Core 10 is
-       net10.0-only, so one EF Core line keeps both assets of a Foundation package on the same data
-       access code. -->
+       sees it. -->
   <PropertyGroup>
     <BsftRuntimePackageVersion>9.0.19</BsftRuntimePackageVersion>
     <BsftRuntimePackageVersion Condition="'$(TargetFramework)' == 'net10.0'">10.0.12</BsftRuntimePackageVersion>
+    <!-- The AI family takes the 10.0.x runtime line on every framework, net8.0 included: the
+         Microsoft.Extensions.AI 10.x packages pinned below depend on Microsoft.Extensions.* and
+         System.Diagnostics.DiagnosticSource 10.0.12 in their net8.0 dependency group too, so a 9.0.19
+         pin in any project that carries them, directly or through a project reference, fails the
+         restore as a downgrade (NU1605). The family is every project named Bsft.AI* or Bsft.Chat.AI*
+         (with its test project), which is exactly the set that references Microsoft.Extensions.AI;
+         a project outside it that takes a reference into the family fails the same way, loudly, and
+         joins the condition. The Microsoft.Extensions.* 10.0.x packages ship a net8.0 asset, so the
+         family stays on net8.0; only its dependency graph moves, and the rest of the framework keeps
+         the 9.0.19 line. -->
+    <BsftIsAiFamily>false</BsftIsAiFamily>
+    <BsftIsAiFamily Condition="$(MSBuildProjectName.StartsWith('Bsft.AI.')) Or '$(MSBuildProjectName)' == 'Bsft.AI' Or $(MSBuildProjectName.StartsWith('Bsft.Chat.AI'))">true</BsftIsAiFamily>
+    <BsftRuntimePackageVersion Condition="'$(BsftIsAiFamily)' == 'true'">10.0.12</BsftRuntimePackageVersion>
     <BsftAspNetCorePackageVersion>8.0.13</BsftAspNetCorePackageVersion>
     <BsftAspNetCorePackageVersion Condition="'$(TargetFramework)' == 'net10.0'">10.0.12</BsftAspNetCorePackageVersion>
+    <BsftEfCorePackageVersion>9.0.19</BsftEfCorePackageVersion>
+    <BsftEfCorePackageVersion Condition="'$(TargetFramework)' == 'net10.0'">10.0.12</BsftEfCorePackageVersion>
+    <BsftNpgsqlEfCorePackageVersion>9.0.4</BsftNpgsqlEfCorePackageVersion>
+    <BsftNpgsqlEfCorePackageVersion Condition="'$(TargetFramework)' == 'net10.0'">10.0.3</BsftNpgsqlEfCorePackageVersion>
+    <BsftIdentityModelPackageVersion>8.12.0</BsftIdentityModelPackageVersion>
+    <BsftIdentityModelPackageVersion Condition="'$(TargetFramework)' == 'net10.0'">8.19.2</BsftIdentityModelPackageVersion>
   </PropertyGroup>
 
   <!-- Microsoft.Extensions.* -->
@@ -86,7 +110,8 @@
   </ItemGroup>
 
   <!-- EF Core.
-       Baselined on 9.0.x (net8.0-capable) rather than 8.0.x: ExecuteUpdateAsync/ExecuteDeleteAsync
+       For net8.0 (BsftEfCorePackageVersion; net10.0 takes the 10.0.x line, see the top of this file)
+       baselined on 9.0.x (net8.0-capable) rather than 8.0.x: ExecuteUpdateAsync/ExecuteDeleteAsync
        moved from Microsoft.EntityFrameworkCore.Relational into the Core assembly
        (EntityFrameworkQueryableExtensions) between EF Core 8 and 9, so any Bsft.*.EfCore package
        compiled against EF8 throws MissingMethodException the moment a host resolves it against an EF9
@@ -95,16 +120,17 @@
        pattern the doc comments describe. Bsft.Messaging.EFCore is only where it was first found, not
        the extent of the blast radius. Compiling against EF9 closes that whole class of
        binary-compatibility break for all of them at once rather than patching call sites one at a
-       time. See docs/migration-1.3.10.md. -->
+       time. See docs/migration-1.3.10.md. EF Core 10 repeated the break for net10.0 hosts, which is
+       why the net10.0 asset is compiled against EF Core 10. -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="9.0.19" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.19" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="9.0.19" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.19" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.19" />
-    <!-- The Npgsql provider tracks EF Core by major version: 9.0.x targets EF Core 9, the line this
-         repository is now baselined on. It still targets net8.0. -->
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="$(BsftEfCorePackageVersion)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="$(BsftEfCorePackageVersion)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(BsftEfCorePackageVersion)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(BsftEfCorePackageVersion)" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(BsftEfCorePackageVersion)" />
+    <!-- The Npgsql provider tracks EF Core by major version: 9.0.x targets EF Core 9 (and still
+         net8.0), 10.0.x targets EF Core 10, so each framework takes the provider of its EF Core line. -->
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(BsftNpgsqlEfCorePackageVersion)" />
   </ItemGroup>
 
   <!-- Resilience -->
@@ -133,9 +159,25 @@
        for the same reason. Bsft.Auth.Oidc's handler brings it transitively on the 7.x line; in a host
        that runs the relying party and the token server together, 7.x protocols meeting 8.12.0 tokens
        silently drops members of the discovery document — the authorization endpoint among them, which
-       fails every login. It is therefore taken directly there rather than left to resolution. -->
+       fails every login. It is therefore taken directly there rather than left to resolution.
+
+       On net10.0 both are on 8.19.2 (BsftIdentityModelPackageVersion): the ASP.NET Core 10.0.12 JWT
+       bearer and OpenID Connect handlers depend on that version, so 8.12.0 would be a downgrade
+       (NU1605), and the token pipeline stays on one version with the handlers' own. -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.12.0" />
+    <PackageVersion Include="Microsoft.IdentityModel.JsonWebTokens" Version="$(BsftIdentityModelPackageVersion)" />
+  </ItemGroup>
+
+  <!-- System.Security.Cryptography.Pkcs. Not used by Bsft code: Microsoft.Data.SqlClient 6.1.6, which
+       Microsoft.EntityFrameworkCore.SqlServer brings on net10.0, depends on 9.0.11, and that version
+       carries GHSA-2fmv-rv2c-59x7 (NU1902) and GHSA-846f-f764-76mx (NU1903), both denial of service.
+       TreatWarningsAsErrors turns the audit warnings into a failed restore. Bsft.Data.SqlServer
+       references it directly on net10.0 so the floor sits above the transitive request; the first
+       patched version on the 10.0 line is 10.0.13 (8.0.2 and 9.0.21 on the older lines, which the
+       net8.0 graph does not reach: SqlClient 5.1.6 does not depend on it there).
+       Do not move this below 10.0.13. -->
+  <ItemGroup>
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>
 
   <!-- Third-Party -->

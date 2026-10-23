@@ -5,6 +5,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Bsft.Messaging.EFCore.Postgres\Bsft.Messaging.EFCore.Postgres.csproj" />
+    <!-- Not referenced by the package under test; only tests/Shared/RelationalModelWarmup.cs needs it,
+         to reuse Bsft.Data's runtime-model warm-up instead of rebuilding it. -->
+    <ProjectReference Include="..\..\src\Bsft.Data\Bsft.Data.csproj" />
   </ItemGroup>
 
   <ItemGroup>

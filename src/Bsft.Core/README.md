@@ -51,6 +51,11 @@ Neither names a `DbContext`; `Bsft.Data` ships `DbContextUnitOfWork<TContext>` b
 `IClosureCalculator` (computes the ancestor and descendant rows of a tree given as `(Id, ParentId)`
 pairs, generic in the row: the caller passes a `(ancestorId, descendantId, depth)` factory for its own
 closure entity; `ClosureCalculator` is the implementation).
+`ObserverComposite<TObserver>`, `IObserverGuard`/`ObserverGuard` and `IObserverFailureReporter` (tell every
+observer of an event in order and contain an observer's failure, reporting it through a reporter the host
+supplies; `AddBsftObservers` in `Bsft.Hosting` wires a logging one), `KeyedGate<TKey>` (one first-in-first-out
+gate per key, entries removed when the last user leaves) and `SlotPool` (a fixed number of slots, admitted in
+the order callers asked, cancellation semantics documented in docs/core.md).
 `BsftException` is the one type here designed for inheritance:
 derive an application exception from it and `BsftExceptionMiddleware` will map it and carry its
 error code. Every exception the framework itself ships below that base is sealed.

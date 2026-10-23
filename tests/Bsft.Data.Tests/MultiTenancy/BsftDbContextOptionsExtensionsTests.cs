@@ -65,7 +65,11 @@ public class BsftDbContextOptionsExtensionsTests
         using var context = new TenantFilterDbContext(options, tenantContext);
         context.Database.EnsureCreated();
 
+#if NET10_0_OR_GREATER
+        context.Model.FindEntityType(typeof(TestEntity))!.GetDeclaredQueryFilters().Should().NotBeEmpty();
+#else
         context.Model.FindEntityType(typeof(TestEntity))!.GetQueryFilter().Should().NotBeNull();
+#endif
     }
 
     [Fact]
@@ -81,8 +85,13 @@ public class BsftDbContextOptionsExtensionsTests
         using var context = new MixedEntityDbContext(options, tenantContext);
         context.Database.EnsureCreated();
 
+#if NET10_0_OR_GREATER
+        context.Model.FindEntityType(typeof(TestEntity))!.GetDeclaredQueryFilters().Should().NotBeEmpty();
+        context.Model.FindEntityType(typeof(NonTenantEntity))!.GetDeclaredQueryFilters().Should().BeEmpty();
+#else
         context.Model.FindEntityType(typeof(TestEntity))!.GetQueryFilter().Should().NotBeNull();
         context.Model.FindEntityType(typeof(NonTenantEntity))!.GetQueryFilter().Should().BeNull();
+#endif
     }
 
     /// <summary>

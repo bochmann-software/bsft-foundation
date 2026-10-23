@@ -1,8 +1,11 @@
 using Bsft.Hosting.Logging;
 using Bsft.Logging;
+using Bsft.Logging.Sinks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Bsft.Hosting.DependencyInjection;
 
@@ -95,7 +98,7 @@ public static class HostLoggingServiceCollectionExtensions
             builder.AddFilter("System", options.SystemLevel);
             builder.AddFilter("Microsoft.AspNetCore", options.AspNetCoreLevel);
 
-            AddConsoleProvider(builder, options);
+            AddConsoleProvider(builder, options, fileOptions);
 
             if (options.EnableDebug)
             {
@@ -115,7 +118,7 @@ public static class HostLoggingServiceCollectionExtensions
         return services;
     }
 
-    private static void AddConsoleProvider(ILoggingBuilder builder, BsftHostLoggingOptions options)
+    private static void AddConsoleProvider(ILoggingBuilder builder, BsftHostLoggingOptions options, Bsft.Logging.BsftLoggingOptions fileOptions)
     {
         if (!options.EnableConsole)
             return;
@@ -135,9 +138,13 @@ public static class HostLoggingServiceCollectionExtensions
             consoleOptions.FormatterName = HostingDefaults.ConsoleFormatterName;
         });
 
+        builder.Services.TryAddSingleton<IScopeLineEncoder, ScopeLineEncoder>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<BsftConsoleFormatterOptions>, BsftConsoleFormatterOptionsValidator>());
         builder.AddConsoleFormatter<BsftConsoleFormatter, BsftConsoleFormatterOptions>(formatterOptions =>
         {
             formatterOptions.IncludeScopes = options.IncludeScopes;
+            formatterOptions.PersistedScopeKeys = [.. fileOptions.PersistedScopeKeys];
         });
     }
 }

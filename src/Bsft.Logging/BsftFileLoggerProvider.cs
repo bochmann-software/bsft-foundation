@@ -25,6 +25,7 @@ public sealed class BsftFileLoggerProvider : ILoggerProvider, IDisposable
     private readonly BsftLoggingOptions _options;
     private readonly string _basePath;
     private readonly TimeProvider _timeProvider;
+    private readonly LogScopeChain _scopes;
     private readonly ILogFileNaming _fileNaming;
     private readonly ConcurrentQueue<string> _queue = new();
     private readonly ManualResetEventSlim _signal = new(false);
@@ -80,7 +81,7 @@ public sealed class BsftFileLoggerProvider : ILoggerProvider, IDisposable
     /// Thrown when a configured value cannot be used, naming the member and the value.
     /// </exception>
     public BsftFileLoggerProvider(BsftLoggingOptions options, TimeProvider? timeProvider = null)
-        : this(options, BasePathOf(options), timeProvider, new LogFileNaming())
+        : this(options, BasePathOf(options), timeProvider, new LogFileNaming(), new LogScopeChain(options))
     {
     }
 
@@ -115,7 +116,7 @@ public sealed class BsftFileLoggerProvider : ILoggerProvider, IDisposable
     /// <param name="basePath">The absolute path to the log directory.</param>
     /// <param name="timeProvider">The time provider used for date-based file naming.</param>
     internal BsftFileLoggerProvider(BsftLoggingOptions options, string basePath, TimeProvider? timeProvider = null)
-        : this(options, basePath, timeProvider, new LogFileNaming())
+        : this(options, basePath, timeProvider, new LogFileNaming(), new LogScopeChain(options))
     {
     }
 
@@ -124,18 +125,20 @@ public sealed class BsftFileLoggerProvider : ILoggerProvider, IDisposable
         BsftLoggingOptions options,
         TimeProvider? timeProvider,
         ILogFileNaming fileNaming)
-        : this(options, BasePathOf(options), timeProvider, fileNaming)
+        : this(options, BasePathOf(options), timeProvider, fileNaming, new LogScopeChain(options))
     {
     }
 
-    /// <summary>Initializes the DI-owned provider with the naming service shared by writer and reader.</summary>
+    /// <summary>Initializes the DI-owned provider with the naming service shared by writer and reader and the scope chain of its loggers.</summary>
     internal BsftFileLoggerProvider(
         BsftLoggingOptions options,
         string basePath,
         TimeProvider? timeProvider,
-        ILogFileNaming fileNaming)
+        ILogFileNaming fileNaming,
+        LogScopeChain scopes)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         _basePath = basePath ?? throw new ArgumentNullException(nameof(basePath));
         _timeProvider = timeProvider ?? TimeProvider.System;
         _fileNaming = fileNaming ?? throw new ArgumentNullException(nameof(fileNaming));
@@ -151,7 +154,12 @@ public sealed class BsftFileLoggerProvider : ILoggerProvider, IDisposable
     }
 
     /// <inheritdoc />
-    public ILogger CreateLogger(string categoryName) => new BsftFileLogger(this, categoryName, _options, _timeProvider);
+    public ILogger CreateLogger(string categoryName) => new BsftFileLogger(
+        this,
+        categoryName,
+        _options,
+        _scopes,
+        _timeProvider);
 
     /// <summary>
     /// Enqueues a formatted log entry for asynchronous writing to the current log file.

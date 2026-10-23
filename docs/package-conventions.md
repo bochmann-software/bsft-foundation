@@ -129,6 +129,15 @@ closure — the folder has no `.csproj`, so nothing enumerates it as a test proj
 and no implicit glob picks it up. The assertion stays with the package it is
 about; only the mechanics move.
 
+One file is compiled in by `Directory.Build.targets` instead of being linked:
+`tests/Shared/RelationalModelWarmup.cs` goes into every test project whose
+resolved references include EF Core's relational layer. EF Core builds a model's
+relational view lazily, and two contexts asking for it at once can make one of
+them throw "The model must be finalized"; parallel test classes sharing a context
+type do that on a loaded machine. The file builds the view as each context
+initializes, and it has to reach every such test project, including the next one,
+without anybody remembering to link it.
+
 ### Tiers: Foundation and framework
 
 The packages come in two tiers. The **Foundation** is the part of the framework
@@ -170,14 +179,23 @@ The rules that make the cut real:
 - **A framework package may reference any Foundation package**, and does so at
   `BsftFoundationVersion`.
 - **The target frameworks follow the tier.** A Foundation package targets
-  `net8.0` and `net10.0` (`BsftFoundationTargetFrameworks`), every other project
-  `net8.0` (`BsftFrameworkTargetFramework`). `Directory.Build.props` reads the
-  tier from the `<Version>` line itself, so the version marker stays the only
-  marker: no project file names its target frameworks. A test project takes the
-  tier of the package it is named after (`tests/Bsft.X.Tests` tests `src/Bsft.X`),
-  so a Foundation package is tested on every framework it ships for; samples stay
-  on `net8.0`. `net10.0` restores the 10.0 line of the Microsoft.Extensions.* and
-  ASP.NET Core packages, `net8.0` keeps its own (`Directory.Packages.props`).
+  `net8.0` and `net10.0` (`BsftFoundationTargetFrameworks`), and so does a
+  framework package (`BsftFrameworkTargetFrameworks`); every other project — a
+  sample, `Bsft.Templates`, a scenario test project — targets the reference
+  framework `net8.0` (`BsftReferenceTargetFramework`). The two tiers name their
+  frameworks separately so that each can move on its own (the public Foundation
+  may keep a framework longer than the internal packages), but each includes the
+  reference framework, which the analysis and the coverage gate measure every
+  package on. `Directory.Build.props` reads the tier from the `<Version>` line of
+  `src/<name>/<name>.csproj` itself, so the version marker stays the only marker:
+  no project file names its target frameworks. A test project takes the tier of
+  the package it is named after (`tests/Bsft.X.Tests` tests `src/Bsft.X`), so a
+  package is tested on every framework it ships for. `net10.0` restores the 10.0
+  line of the Microsoft.Extensions.*, ASP.NET Core and EF Core packages, `net8.0`
+  keeps its own (`Directory.Packages.props`): a `net10.0` host runs EF Core 10,
+  whose `ExecuteUpdateAsync` an assembly compiled against EF Core 9 cannot call.
+  Where an API differs between the two lines, the source says so with
+  `#if NET10_0_OR_GREATER` at that call and nowhere else.
   Coverage is held at 100 % on each framework and never merged across them: a
   line covered on one framework says nothing about another (.NET 10 runs a hosted
   service's `ExecuteAsync` on the thread pool, and skips the key selector of an
@@ -578,6 +596,12 @@ flagged. Two limits shaped them and are worth knowing before writing a fourth:
   read as implementing nothing until they were given a direct reference to
   `Bsft.Mediator.Abstractions` — which they should have had anyway, since they
   use its types.
+- **It is also empty across a multi-targeted reference.** Since the packages build for
+  `net8.0` and `net10.0`, a project's interfaces from a referenced package
+  (`ICommand`, `ICommandHandler<,>` and the rest of `Bsft.Mediator.Abstractions`) are missing from
+  the set, and these rules flag handlers that do implement their contract. Analyse with the
+  packages narrowed to the reference framework, as `ci.yml` does:
+  `BsftOnlyTargetFramework=net8.0` for both the build and `codecharter analyze`.
 
 `bsft-mediator-message-marker` checks `*Command` and deliberately not `*Query`.
 `Query` had a second, older meaning here: the object an endpoint binds its HTTP
@@ -596,6 +620,7 @@ that names fewer rule sources than the configuration is not a verdict, and exit 
 run was inconclusive rather than clean. Locally:
 
 ```bash
+export BsftOnlyTargetFramework=net8.0         # the reference framework, as ci.yml analyses
 dotnet build Bsft.sln -m:1
 codecharter restore
 codecharter analyze Bsft.sln --fail-on info   # the profile and these rules
@@ -645,8 +670,8 @@ namespace cycle; `.Abstractions` folders that are feature folders of the
 implementation; a mirroring test project per package; large satellites' entities
 beside their feature; a `docs/packages.md` row per package; one top-level type
 per file, named after it; and the tiers of section 1 — every package names one of
-the two version properties, no project names its target frameworks, a Foundation package references only Foundation
-packages, and `Bsft.Foundation.sln` lists exactly the Foundation packages, their
+the two version properties, no project names its target frameworks, each tier's frameworks include the reference
+framework, a Foundation package references only Foundation packages, and `Bsft.Foundation.sln` lists exactly the Foundation packages, their
 test projects and the Foundation samples, closed under references. Each violation
 names the sentence it breaks. Locally:
 

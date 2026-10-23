@@ -99,7 +99,7 @@ export const RULES = {
   },
   'tier-target': {
     cite: 'PC 1 "Tiers: Foundation and framework"',
-    text: 'The target frameworks follow the tier: Directory.Build.props gives a Foundation package and its test project net8.0 and net10.0, and every other project net8.0. No project file names its target frameworks.',
+    text: 'The target frameworks follow the tier: Directory.Build.props gives a Foundation package and its test project `BsftFoundationTargetFrameworks`, a framework package and its test project `BsftFrameworkTargetFrameworks` (both net8.0 and net10.0), and every other project the reference framework `BsftReferenceTargetFramework` (net8.0), which every tier ships for. No project file names its target frameworks.',
   },
   'tier-reference': {
     cite: 'PC 1 "Tiers: Foundation and framework"',
@@ -141,7 +141,7 @@ const TEST_ONLY_FOLDERS = new Set(['Support', 'Fakes']);
 
 const ENTRY_POINT = /(?:ServiceCollection|EndpointRouteBuilder|ApplicationBuilder)Extensions$/;
 
-export function runChecks(repo, { solution, foundationSolution, packagesMd, graph } = {}) {
+export function runChecks(repo, { solution, foundationSolution, packagesMd, graph, buildProps } = {}) {
   const violations = [];
   const report = (rule, where, message) => violations.push({ rule, where, message });
   const skipped = [];
@@ -190,6 +190,24 @@ export function runChecks(repo, { solution, foundationSolution, packagesMd, grap
     if (p.declaredTargetFrameworks !== null) {
       report('tier-target', p.csproj, `names its target frameworks (${p.declaredTargetFrameworks}); Directory.Build.props derives them from the tier.`);
     }
+  }
+  // PC 1: each tier's frameworks are a property of Directory.Build.props, and each includes the
+  // reference framework: the analysis and the coverage gate measure every package on it, so a tier
+  // that dropped it would leave its packages unmeasured rather than failing.
+  if (buildProps !== undefined) {
+    const property = (name) => buildProps.match(new RegExp(`<${name}>\\s*([^<]*?)\\s*</${name}>`))?.[1];
+    const reference = property('BsftReferenceTargetFramework');
+    if (!reference) report('tier-target', 'Directory.Build.props', 'declares no BsftReferenceTargetFramework, the framework every project shares.');
+    for (const name of ['BsftFoundationTargetFrameworks', 'BsftFrameworkTargetFrameworks']) {
+      const frameworks = (property(name) ?? '').split(';').map((f) => f.trim()).filter(Boolean);
+      if (frameworks.length === 0) {
+        report('tier-target', 'Directory.Build.props', `declares no ${name}; the target frameworks of that tier are derived from it.`);
+      } else if (reference && !frameworks.includes(reference)) {
+        report('tier-target', 'Directory.Build.props', `${name} (${frameworks.join(';')}) leaves out the reference framework ${reference}, which every package ships for and the gates measure.`);
+      }
+    }
+  } else {
+    skipped.push('tier-target frameworks of the tiers (no Directory.Build.props)');
   }
   for (const p of src.filter((q) => q.tier === 'foundation')) {
     for (const r of p.references) {

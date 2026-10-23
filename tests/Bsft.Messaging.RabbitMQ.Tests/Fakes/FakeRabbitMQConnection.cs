@@ -1,4 +1,5 @@
 using Bsft.Messaging.RabbitMQ.Connections;
+using Bsft.Messaging.RabbitMQ.Tests.Support;
 
 namespace Bsft.Messaging.RabbitMQ.Tests.Fakes;
 
@@ -6,6 +7,19 @@ namespace Bsft.Messaging.RabbitMQ.Tests.Fakes;
 internal sealed class FakeRabbitMQConnection : IRabbitMQConnection
 {
     private readonly Queue<FakeRabbitMQChannel> _channels = new();
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FakeRabbitMQConnection"/> class.
+    /// </summary>
+    /// <param name="signal">
+    /// The wakeup to pulse on every call, and to hand to a channel this connection creates itself
+    /// (rather than one a test queued through <see cref="WithChannel"/>) so a test waiting on this
+    /// connection also wakes up for what that channel does. Defaults to one of its own.
+    /// </param>
+    public FakeRabbitMQConnection(ChangeSignal? signal = null) => Signal = signal ?? new ChangeSignal();
+
+    /// <summary>The wakeup pulsed every time this connection is called.</summary>
+    public ChangeSignal Signal { get; }
 
     public bool IsOpen { get; set; } = true;
 
@@ -30,12 +44,16 @@ internal sealed class FakeRabbitMQConnection : IRabbitMQConnection
     public Task<IRabbitMQChannel> CreateChannelAsync(bool publisherConfirmations, CancellationToken ct = default)
     {
         if (CreateChannelFailure is not null)
+        {
+            Signal.Pulse();
             return Task.FromException<IRabbitMQChannel>(CreateChannelFailure);
+        }
 
         RequestedConfirmations.Add(publisherConfirmations);
 
-        var channel = _channels.Count > 0 ? _channels.Dequeue() : new FakeRabbitMQChannel();
+        var channel = _channels.Count > 0 ? _channels.Dequeue() : new FakeRabbitMQChannel(Signal);
         CreatedChannels.Add(channel);
+        Signal.Pulse();
 
         return Task.FromResult<IRabbitMQChannel>(channel);
     }
@@ -44,6 +62,7 @@ internal sealed class FakeRabbitMQConnection : IRabbitMQConnection
     {
         DisposeCount++;
         IsOpen = false;
+        Signal.Pulse();
         return ValueTask.CompletedTask;
     }
 

@@ -28,6 +28,7 @@ public sealed class DependencyClosureTests
     [
         typeof(ICorrelationContext),
         typeof(CorrelationDefaults),
+        typeof(LogScopeKeys),
     ];
 
     /// <summary>The restored dependency graph, which is the artefact that actually decides this.</summary>

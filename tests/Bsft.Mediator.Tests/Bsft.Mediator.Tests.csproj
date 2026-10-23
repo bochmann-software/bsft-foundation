@@ -18,6 +18,9 @@
     -->
     <ProjectReference Include="..\..\src\Bsft.Caching.Mediator\Bsft.Caching.Mediator.csproj" />
     <ProjectReference Include="..\..\src\Bsft.Resilience.Mediator\Bsft.Resilience.Mediator.csproj" />
+    <!-- Not referenced by the package under test; only tests/Shared/RelationalModelWarmup.cs needs it,
+         to reuse Bsft.Data's runtime-model warm-up instead of rebuilding it. -->
+    <ProjectReference Include="..\..\src\Bsft.Data\Bsft.Data.csproj" />
   </ItemGroup>
 
   <ItemGroup>

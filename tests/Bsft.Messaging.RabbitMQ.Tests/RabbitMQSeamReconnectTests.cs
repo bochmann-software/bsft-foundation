@@ -19,9 +19,17 @@ namespace Bsft.Messaging.RabbitMQ.Tests;
 public class RabbitMQSeamReconnectTests
 {
 
-    private readonly FakeRabbitMQConnectionFactory _connectionFactory = new();
-    private readonly FakeRabbitMQConnection _connection = new();
-    private readonly FakeRabbitMQChannel _channel = new();
+    private readonly ChangeSignal _signal = new();
+    private readonly FakeRabbitMQConnectionFactory _connectionFactory;
+    private readonly FakeRabbitMQConnection _connection;
+    private readonly FakeRabbitMQChannel _channel;
+
+    public RabbitMQSeamReconnectTests()
+    {
+        _connectionFactory = new FakeRabbitMQConnectionFactory(_signal);
+        _connection = new FakeRabbitMQConnection(_signal);
+        _channel = new FakeRabbitMQChannel(_signal);
+    }
 
     [Fact]
     public async Task A_stream_that_could_not_connect_is_enumerated_again_after_the_restart_delay()
@@ -36,10 +44,10 @@ public class RabbitMQSeamReconnectTests
         var host = provider.GetServices<IHostedService>().OfType<IntegrationEventConsumerHost>().Single();
         await host.StartAsync(CancellationToken.None);
 
-        await Eventually.HoldsAsync(() => _connectionFactory.CreateCount >= 1);
+        await Eventually.HoldsAsync(() => _connectionFactory.CreateCount >= 1, _signal);
         _connectionFactory.CreateFailure = null;
 
-        await Eventually.HoldsAsync(() => _channel.ConsumedQueue is not null);
+        await Eventually.HoldsAsync(() => _channel.ConsumedQueue is not null, _signal);
         _connectionFactory.CreateCount.Should().BeGreaterThan(1);
 
         await host.StopAsync(CancellationToken.None);
@@ -58,16 +66,16 @@ public class RabbitMQSeamReconnectTests
         await using var provider = Provider();
         var host = provider.GetServices<IHostedService>().OfType<IntegrationEventConsumerHost>().Single();
         await host.StartAsync(CancellationToken.None);
-        await Eventually.HoldsAsync(() => _channel.ConsumedQueue is not null);
+        await Eventually.HoldsAsync(() => _channel.ConsumedQueue is not null, _signal);
 
         _connection.CreateChannelFailure = new OperationInterruptedException();
         await _connection.RaiseRecoverySucceededAsync();
 
         // A second connection, still refusing nothing: the source stopped the consumer as the stream
         // unwound, so the host's next enumeration opens the subscription from scratch.
-        await Eventually.HoldsAsync(() => _connectionFactory.CreatedConnections.Count >= 2);
+        await Eventually.HoldsAsync(() => _connectionFactory.CreatedConnections.Count >= 2, _signal);
         var reconnected = _connectionFactory.CreatedConnections[1];
-        await Eventually.HoldsAsync(() => reconnected.CreatedChannels.Any(c => c.ConsumedQueue is not null));
+        await Eventually.HoldsAsync(() => reconnected.CreatedChannels.Any(c => c.ConsumedQueue is not null), _signal);
 
         _connection.DisposeCount.Should().Be(1);
         _connection.HasRecoverySubscriber.Should().BeFalse();

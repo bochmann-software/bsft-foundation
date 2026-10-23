@@ -11,7 +11,7 @@ internal static class LogFileEntryDecoder
     private const int InitialExceptionCapacity = 4096;
 
     private static readonly Regex TextEntryPattern = new(
-        @"^\[(?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (?<level>TRC|DBG|INF|WRN|ERR|CRT)\] \[(?<correlation>[^\]]*)\] (?<category>[^:]+): (?<message>.*)$",
+        @"^\[(?<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (?<level>TRC|DBG|INF|WRN|ERR|CRT)\] \[(?<correlation>(?:[^\]\\]|\\.)*)\] (?:\{(?<scope>(?:[^\\=;}]|\\.)+=(?:[^\\;}]|\\.)*(?:;(?:[^\\=;}]|\\.)+=(?:[^\\;}]|\\.)*)*)\} )?(?<category>[^:]+): (?<message>.*)$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly IReadOnlyDictionary<string, LogLevel> Levels =
         new Dictionary<string, LogLevel>(StringComparer.Ordinal)
@@ -46,11 +46,12 @@ internal static class LogFileEntryDecoder
             out var exceptionWasTruncated);
         var rawText = exception is null ? line.Text : $"{line.Text}{Environment.NewLine}{exception}";
         var offset = localTimeZone.GetUtcOffset(localTimestamp);
-        return new LogFileEntry(
+        var correlationId = CorrelationIdOrNull(ScopePropertyEncoding.Unescape(match.Groups["correlation"].Value));
+        var entry = new LogFileEntry(
             LogFileSequence.Of(file, line.Offset),
             new DateTimeOffset(localTimestamp, offset),
             Levels[match.Groups["level"].Value],
-            match.Groups["correlation"].Value,
+            correlationId,
             match.Groups["category"].Value,
             match.Groups["message"].Value,
             exception,
@@ -59,6 +60,9 @@ internal static class LogFileEntryDecoder
         {
             IsTruncated = line.IsTruncated || continuation.WasTruncated || exceptionWasTruncated
         };
+        return LogEntryScope.WithScope(
+            entry,
+            match.Groups["scope"].Success ? ScopePropertyEncoding.Parse(match.Groups["scope"].Value) : null);
     }
 
     public static LogFileEntry? ParseJsonOrNull(
@@ -72,19 +76,27 @@ internal static class LogFileEntryDecoder
             if (!TryReadRequired(root, out var timestamp, out var level, out var message))
                 return null;
 
-            return new LogFileEntry(
+            var correlationId = CorrelationIdOrNull(StringProperty(root, "correlationId"));
+            var entry = new LogFileEntry(
                 LogFileSequence.Of(file, line.Offset), timestamp, level,
-                StringProperty(root, "correlationId"), StringProperty(root, "category"),
+                correlationId, StringProperty(root, "category"),
                 message, StringProperty(root, "exception"), line.Text, IsMalformed: false)
             {
                 IsTruncated = line.IsTruncated
             };
+            return LogEntryScope.WithScope(entry, LogEntryScope.FromJson(root));
         }
         catch (JsonException)
         {
             return null;
         }
     }
+
+    /// <summary>Reads the writer's "outside any scope" marker and an empty field as no correlation id.</summary>
+    private static string? CorrelationIdOrNull(string? value)
+        => string.IsNullOrEmpty(value) || string.Equals(value, BsftFileLogger.NoCorrelationId, StringComparison.Ordinal)
+            ? null
+            : value;
 
     private static bool TryReadRequired(
         JsonElement root,

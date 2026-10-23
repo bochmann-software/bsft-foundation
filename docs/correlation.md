@@ -126,7 +126,7 @@ dependency needs:
 
 | Package | Contains | Depends on |
 | --- | --- | --- |
-| `Bsft.Correlation.Abstractions` | `ICorrelationContext` and the `CorrelationDefaults.CorrelationId` header-name constant | nothing at all |
+| `Bsft.Correlation.Abstractions` | `ICorrelationContext`, the `CorrelationDefaults.CorrelationId` header-name constant and `LogScopeKeys.CorrelationId`, the log scope key | nothing at all |
 | `Bsft.Correlation.Http` | `CorrelationIdDelegatingHandler` and the `AddBsftCorrelationHttp()` wiring | the abstractions and `Microsoft.Extensions.DependencyInjection.Abstractions` |
 | `Bsft.Correlation` | `CorrelationContext`, `CorrelationIdMiddleware`, `CorrelationIdLoggingEnricher`, the `AddBsftCorrelation()` / `UseBsftCorrelation()` wiring | ASP.NET Core (`Microsoft.AspNetCore.App`), plus the other two |
 

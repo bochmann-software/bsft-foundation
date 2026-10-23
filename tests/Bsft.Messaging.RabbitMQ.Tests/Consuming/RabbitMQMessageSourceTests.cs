@@ -13,14 +13,18 @@ namespace Bsft.Messaging.RabbitMQ.Tests.Consuming;
 public class RabbitMQMessageSourceTests : IAsyncLifetime
 {
     private readonly BsftRabbitMQOptions _options = TestOptions.Valid();
-    private readonly FakeRabbitMQConnectionFactory _connectionFactory = new();
+    private readonly ChangeSignal _signal = new();
+    private readonly FakeRabbitMQConnectionFactory _connectionFactory;
     private readonly FakeRabbitMQParkPublisher _parkPublisher = new();
-    private readonly FakeRabbitMQChannel _channel = new();
-    private readonly FakeRabbitMQConnection _connection = new();
+    private readonly FakeRabbitMQChannel _channel;
+    private readonly FakeRabbitMQConnection _connection;
     private readonly RabbitMQMessageConsumer _consumer;
 
     public RabbitMQMessageSourceTests()
     {
+        _connectionFactory = new FakeRabbitMQConnectionFactory(_signal);
+        _channel = new FakeRabbitMQChannel(_signal);
+        _connection = new FakeRabbitMQConnection(_signal);
         _connection.WithChannel(_channel);
         _connectionFactory.WithConnection(_connection);
         _consumer = new RabbitMQMessageConsumer(
@@ -338,7 +342,7 @@ public class RabbitMQMessageSourceTests : IAsyncLifetime
                 break;
             }
         });
-        await Eventually.HoldsAsync(() => _consumer.IsConsuming);
+        await Eventually.HoldsAsync(() => _consumer.IsConsuming, _signal);
         await _channel.DeliverAsync(TestDeliveries.Delivery(1));
         await pulling;
 

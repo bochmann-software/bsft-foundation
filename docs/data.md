@@ -69,6 +69,57 @@ package's one registration class. The query-configuration types —
 `IDataTelemetry` is in `Bsft.Data` itself, because `Diagnostics/` is a structural
 folder that adds no namespace segment.
 
+## The relational model warm-up
+
+EF Core builds a model's *relational* model (tables, columns, mappings) lazily,
+on the first `GetRelationalModel` call, and that call has a check-then-act gap:
+it reads the built relational model, finds none, and only then reads the factory
+that builds it, while the caller that does build it stores the result and removes
+the factory in between. A caller caught between the two reads finds neither and
+throws "The model must be finalized and its runtime dependencies must be
+initialized before 'GetRelationalModel' can be used". The gap exists only while a
+model is new, so it hits concurrent first requests (or background workers)
+right after a host starts. It is present in EF Core 9 and 10.
+
+`AddBsftDataQueryFiltering`, `AddBsftDataUnitOfWork<TContext>` and
+`AddBsftDataMultiTenancy` register a hosted service that closes it; a host using
+EF Core without any of them calls `AddBsftDataModelWarmup()` itself.
+Calling it more than once registers it once.
+
+```csharp
+services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
+services.AddBsftDataModelWarmup();
+```
+
+The service subscribes to EF Core's diagnostic listener in `StartingAsync`, which
+the host runs for every lifecycle service before it starts any hosted service,
+and builds the runtime model's relational model when a context reports
+`ContextInitialized` — before that context can run a command — under one
+process-wide lock. Every later caller finds the built model on its first read.
+It needs no knowledge of how a context is registered (`AddDbContext`, a factory,
+a pool or `new`), resolves nothing itself, skips non-relational providers, and
+costs one annotation lookup per context once the model is built. The subscription
+ends when the host has stopped.
+
+Only the runtime model is built. The design-time model that migrations and
+`EnsureCreated` use is a second, separately cached model; building it for every
+context type would double the model cost of every host to cover a path that runs
+once, at deployment.
+
+To keep EF Core's lazy build, turn it off:
+
+```csharp
+services.Configure<BsftDataOptions>(o => o.ShouldWarmRelationalModels = false);
+```
+
+or set `Bsft:Data:ShouldWarmRelationalModels` to `false` where the section is bound
+(`AddBsftDataMultiTenancy(configuration, ...)`).
+
+A test has no host to run the hosted service, so `Bsft.Data.Testing.TestRelationalModelWarmup.EnsureRelationalModelBuilt(this DbContext)`
+builds the same runtime model from a test's own startup hook. `tests/Shared/RelationalModelWarmup.cs` calls it for
+every relational EF test project in this repository and builds the design-time model itself, the one path this
+guard leaves lazy on purpose.
+
 ## The unit of work
 
 `DbContextUnitOfWork<TContext>` is the framework's implementation of both

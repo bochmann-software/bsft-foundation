@@ -160,7 +160,7 @@ ignore:
   # extension class per feature folder: the folder names the feature, so the mandated name is
   # BackgroundWorkServiceCollectionExtensions at 41. The escape used elsewhere — drop the family
   # prefix the namespace carries — is already taken, because "Bsft.Hosting" is not in the name.
-  - { rule: type-name-length, match: "Bsft.Hosting.DependencyInjection.BackgroundWorkServiceCollectionExtensions" }
+  - { rule: type-name-length, match: "Bsft.Hosting.BackgroundWork.DependencyInjection.BackgroundWorkServiceCollectionExtensions" }
   # Bsft.Idempotency.EFCore, the same conflict as the two above and checked against the same escape.
   # IdempotencyEfCore is 17 characters before the mandated 26-character suffix, so the conforming
   # name lands at 43. Dropping the family prefix the namespace carries is not available: the short
@@ -466,12 +466,20 @@ scopes:
   # returns a task at all. Nothing is swallowed — the failure goes to the reporter
   # exactly as a faulted pass does, and a preceding clause keeps cancellation apart.
   #
+  # ObserverGuard is the same boundary for observers: its whole contract is that an observer may
+  # fail in any way it likes without failing the operation it watches, and the observer is a type
+  # this assembly cannot name. Nothing is swallowed: the failure is counted and handed to the
+  # IObserverFailureReporter, and a preceding clause keeps the cancellation of the observed
+  # operation apart. The last catch contains a reporter that fails itself, for the same reason. Each
+  # is pinned by a test.
+  #
   # ExternalServiceHealthCheck belongs to the same group for a security reason: it
   # is a sanitising boundary. Narrowing its catch was tried and reverted, because
   # anything that escapes is caught by HealthCheckService instead, which builds the
   # report entry from the raw exception message rather than the fixed sentence the
   # check returns.
   - match:
+      - "src/Bsft.Core/Observers/ObserverGuard.cs"
       - "src/Bsft.Core/Polling/PollLoop.cs"
       - "src/Bsft.EventAggregator.Saga/Timeouts/SagaTimeoutDispatcher.cs"
       - "src/Bsft.Hosting/BsftExceptionMiddleware.cs"

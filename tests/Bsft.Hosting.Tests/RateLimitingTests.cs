@@ -21,6 +21,9 @@ public class RateLimitingTests
 
         options.PermitLimit.Should().Be(100);
         options.WindowSeconds.Should().Be(60);
+        options.RetryAfterSeconds.Should().Be(1);
+        options.Policies.Should().BeEmpty();
+        options.PartitionKeySelectors.Should().BeEmpty();
     }
 
     [Fact]
@@ -254,5 +257,121 @@ public class RateLimitingTests
         var act = () => services.AddBsftRateLimiting(new ConfigurationBuilder().Build());
 
         act.Should().Throw<ArgumentNullException>().WithParameterName("services");
+    }
+
+    [Fact]
+    public void AddBsftRateLimiting_WithPoliciesInConfiguration_BindsEveryLimiter()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                { "Bsft:Hosting:RateLimiting:RetryAfterSeconds", "7" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-streams:Limiters:0:Kind", "Concurrency" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-streams:Limiters:0:PartitionBy", "Principal" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-streams:Limiters:0:PermitLimit", "3" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-streams:Limiters:1:Kind", "Concurrency" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-streams:Limiters:1:PartitionBy", "Global" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-streams:Limiters:1:PermitLimit", "64" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-streams:Limiters:1:RetryAfterSeconds", "5" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-intents:Limiters:0:Kind", "TokenBucket" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-intents:Limiters:0:TokensPerPeriod", "2" },
+                { "Bsft:Hosting:RateLimiting:Policies:upload-intents:Limiters:0:ClaimType", "sid" }
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBsftRateLimiting(configuration);
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<BsftRateLimitingOptions>>().Value;
+
+        options.RetryAfterSeconds.Should().Be(7);
+        options.Policies.Should().HaveCount(2);
+
+        options.Policies["upload-streams"].Limiters.Should().HaveCount(2);
+        options.Policies["upload-streams"].Limiters[0].Kind.Should().Be(RateLimiterKind.Concurrency);
+        options.Policies["upload-streams"].Limiters[0].PartitionBy.Should().Be(RateLimitPartitionKind.Principal);
+        options.Policies["upload-streams"].Limiters[0].PermitLimit.Should().Be(3);
+        options.Policies["upload-streams"].Limiters[1].Kind.Should().Be(RateLimiterKind.Concurrency);
+        options.Policies["upload-streams"].Limiters[1].PartitionBy.Should().Be(RateLimitPartitionKind.Global);
+        options.Policies["upload-streams"].Limiters[1].PermitLimit.Should().Be(64);
+        options.Policies["upload-streams"].Limiters[1].RetryAfterSeconds.Should().Be(5);
+
+        options.Policies["upload-intents"].Limiters.Should().HaveCount(1);
+        options.Policies["upload-intents"].Limiters[0].Kind.Should().Be(RateLimiterKind.TokenBucket);
+        options.Policies["upload-intents"].Limiters[0].TokensPerPeriod.Should().Be(2);
+        options.Policies["upload-intents"].Limiters[0].ClaimType.Should().Be("sid");
+    }
+
+    [Fact]
+    public void AddBsftRateLimiting_WithInvalidPolicyInConfiguration_FailsOnValidation()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                { "Bsft:Hosting:RateLimiting:Policies:p:Limiters:0:Kind", "FixedWindow" },
+                { "Bsft:Hosting:RateLimiting:Policies:p:Limiters:0:PermitLimit", "0" }
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBsftRateLimiting(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IOptions<BsftRateLimitingOptions>>().Value;
+
+        act.Should().Throw<OptionsValidationException>()
+            .WithMessage("*Policies:p:Limiters:0:PermitLimit*");
+    }
+
+    [Fact]
+    public void AddBsftRateLimiting_WithInvalidPolicy_FailsWhenTheLimiterOptionsAreRead()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                { "Bsft:Hosting:RateLimiting:Policies:p:Limiters:0:Kind", "FixedWindow" },
+                { "Bsft:Hosting:RateLimiting:Policies:p:Limiters:0:PermitLimit", "0" }
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBsftRateLimiting(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IOptions<RateLimiterOptions>>().Value;
+
+        act.Should().Throw<OptionsValidationException>();
+    }
+
+    [Fact]
+    public void AddBsftRateLimiting_CalledTwice_RegistersPoliciesOnce()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBsftRateLimiting();
+        services.AddBsftRateLimiting();
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IOptions<RateLimiterOptions>>().Value.Should().NotBeNull();
+
+        var policiesCount = services.Count(d => d.ServiceType == typeof(ConfiguredRateLimitPolicies));
+        policiesCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void AddBsftRateLimiting_WithRetryAfterSecondsZeroViaAction_FailsValidation()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBsftRateLimiting(o => o.RetryAfterSeconds = 0);
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IOptions<BsftRateLimitingOptions>>().Value;
+
+        act.Should().Throw<OptionsValidationException>()
+            .WithMessage("*RetryAfterSeconds*");
     }
 }

@@ -7,46 +7,70 @@
        <Version>$(BsftFoundationVersion)</Version> (docs/package-conventions.md, "Tiers: Foundation
        and framework"). It is shared, so it moves with the export: the public repository releases
        the Foundation packages at this version to nuget.org, and the framework packages here depend
-       on exactly that version. -->
+       on that version as a minimum. From 2.2.0 on it carries the same version as BsftVersion
+       (docs/releasing.md, "Two version lines"). -->
   <PropertyGroup>
-    <BsftFoundationVersion>2.1.0</BsftFoundationVersion>
+    <BsftFoundationVersion>2.2.0</BsftFoundationVersion>
   </PropertyGroup>
 
   <!-- The target frameworks follow the tier (docs/package-conventions.md, "Tiers: Foundation and
-       framework"). A Foundation package targets net8.0 and net10.0; every other project net8.0.
+       framework"). A Foundation package targets BsftFoundationTargetFrameworks, a framework package
+       BsftFrameworkTargetFrameworks (today both net8.0 and net10.0, but each tier moves on its own:
+       the Foundation is public and may keep a framework longer than the internal packages do).
+       Every project that is not a package, a sample or a tool, targets the reference framework,
+       BsftReferenceTargetFramework, which every package shares.
+
        The tier is read from the one marker there is, the <Version> line of the package's project
        file, so no project names its target frameworks and there is no second list to keep in step
-       (the structure check's tier-target rule refuses a project file that names them).
+       (the structure check's tier-target rule refuses a project file that names them). A package is
+       a project under src/, read as src/<name>/<name>.csproj; Bsft.Templates names $(BsftVersion)
+       too, but it is a content-only pack outside src/ and stays on the reference framework.
 
        A test project takes the tier of the package it tests, src/<name without .Tests>, so a
-       Foundation package is tested on every framework it ships for. A sample or a test project
-       without a package of that name stays on net8.0.
+       package is tested on every framework it ships for. A sample or a test project without a
+       package of that name stays on the reference framework.
 
        The marker is compared as text, escaped (%24 is "$") so that MSBuild does not expand it.
 
-       BsftOnlyTargetFramework (a property or an environment variable) narrows every Foundation
-       project to that one of its frameworks, for a gate that has to measure one framework at a time:
-       the coverage workflow gates net8.0 over Bsft.sln with it, because a line covered on one
-       framework says nothing about the other. It is meant for net8.0, the framework every project
+       BsftOnlyTargetFramework (a property or an environment variable) narrows every package to that
+       one of its frameworks, for a gate that has to measure one framework at a time: the coverage
+       workflow gates net8.0 over Bsft.sln with it, because a line covered on one framework says
+       nothing about the other. It is meant for the reference framework, the one every project
        shares: narrowed to net10.0, the samples lose the packages they reference, so the further
-       frameworks are tested one by one after a full build instead. Unset, every
-       framework is built and tested. -->
+       frameworks are tested one by one after a full build instead. Unset, every framework is built
+       and tested. -->
   <PropertyGroup>
-    <BsftFrameworkTargetFramework>net8.0</BsftFrameworkTargetFramework>
+    <BsftReferenceTargetFramework>net8.0</BsftReferenceTargetFramework>
     <BsftFoundationTargetFrameworks>net8.0;net10.0</BsftFoundationTargetFrameworks>
-    <BsftTierProjectFile>$(MSBuildProjectFullPath)</BsftTierProjectFile>
-    <BsftTierProjectFile Condition="$(MSBuildProjectName.EndsWith('.Tests'))">$(MSBuildThisFileDirectory)src/$(MSBuildProjectName.Substring(0, $([MSBuild]::Subtract($(MSBuildProjectName.Length), 6))))/$(MSBuildProjectName.Substring(0, $([MSBuild]::Subtract($(MSBuildProjectName.Length), 6)))).csproj</BsftTierProjectFile>
-    <BsftIsFoundation>false</BsftIsFoundation>
-    <BsftIsFoundation Condition="Exists('$(BsftTierProjectFile)') And $([System.IO.File]::ReadAllText('$(BsftTierProjectFile)').Contains('&lt;Version&gt;%24(BsftFoundationVersion)&lt;/Version&gt;'))">true</BsftIsFoundation>
+    <BsftFrameworkTargetFrameworks>net8.0;net10.0</BsftFrameworkTargetFrameworks>
+    <BsftTierPackage>$(MSBuildProjectName)</BsftTierPackage>
+    <BsftTierPackage Condition="$(MSBuildProjectName.EndsWith('.Tests'))">$(MSBuildProjectName.Substring(0, $([MSBuild]::Subtract($(MSBuildProjectName.Length), 6))))</BsftTierPackage>
+    <BsftTierProjectFile>$(MSBuildThisFileDirectory)src/$(BsftTierPackage)/$(BsftTierPackage).csproj</BsftTierProjectFile>
+    <BsftTier></BsftTier>
+    <BsftTier Condition="Exists('$(BsftTierProjectFile)') And $([System.IO.File]::ReadAllText('$(BsftTierProjectFile)').Contains('&lt;Version&gt;%24(BsftFoundationVersion)&lt;/Version&gt;'))">foundation</BsftTier>
+    <BsftTier Condition="Exists('$(BsftTierProjectFile)') And $([System.IO.File]::ReadAllText('$(BsftTierProjectFile)').Contains('&lt;Version&gt;%24(BsftVersion)&lt;/Version&gt;'))">framework</BsftTier>
+    <BsftTierTargetFrameworks></BsftTierTargetFrameworks>
+    <BsftTierTargetFrameworks Condition="'$(BsftTier)' == 'foundation'">$(BsftFoundationTargetFrameworks)</BsftTierTargetFrameworks>
+    <BsftTierTargetFrameworks Condition="'$(BsftTier)' == 'framework'">$(BsftFrameworkTargetFrameworks)</BsftTierTargetFrameworks>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(BsftIsFoundation)' == 'true'">
-    <TargetFrameworks>$(BsftFoundationTargetFrameworks)</TargetFrameworks>
-    <TargetFrameworks Condition="'$(BsftOnlyTargetFramework)' != '' And $([System.String]::Copy(';$(BsftFoundationTargetFrameworks);').Contains(';$(BsftOnlyTargetFramework);'))">$(BsftOnlyTargetFramework)</TargetFrameworks>
+  <PropertyGroup Condition="'$(BsftTierTargetFrameworks)' != ''">
+    <TargetFrameworks>$(BsftTierTargetFrameworks)</TargetFrameworks>
+    <TargetFrameworks Condition="'$(BsftOnlyTargetFramework)' != '' And $([System.String]::Copy(';$(BsftTierTargetFrameworks);').Contains(';$(BsftOnlyTargetFramework);'))">$(BsftOnlyTargetFramework)</TargetFrameworks>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(BsftIsFoundation)' != 'true'">
-    <TargetFramework>$(BsftFrameworkTargetFramework)</TargetFramework>
+  <!-- The NuGet audit of a framework package stays on the direct references it had on net8.0. The
+       .NET 10 SDK audits the whole graph by default as soon as a project targets net10.0, and the
+       framework packages' graph carries transitive advisories that net8.0 has always resolved (an
+       ASP.NET Core 8.0.x dependency, a test-only container client, the OpenXml packaging library);
+       fixing them moves the net8.0 graph and is a change of its own. The Foundation already targeted
+       net10.0 with a clean transitive audit and keeps it. -->
+  <PropertyGroup Condition="'$(BsftTier)' == 'framework' And '$(NuGetAuditMode)' == ''">
+    <NuGetAuditMode>direct</NuGetAuditMode>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(BsftTierTargetFrameworks)' == ''">
+    <TargetFramework>$(BsftReferenceTargetFramework)</TargetFramework>
   </PropertyGroup>
 
   <PropertyGroup>

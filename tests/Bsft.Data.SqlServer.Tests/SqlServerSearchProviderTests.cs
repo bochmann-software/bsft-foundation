@@ -27,7 +27,9 @@ public class SqlServerSearchProviderTests : IDisposable
         // own query plan — ruinous for a search-as-you-type endpoint. ToQueryString prints the
         // parameter value in a leading DECLARE, so the predicate itself is what has to be checked.
         var predicate = sql[sql.IndexOf("WHERE", StringComparison.Ordinal)..];
-        predicate.Should().Contain("@__");
+        // A parameter placeholder; EF Core 9 names it after the closure field (@__value_0), EF Core 10
+        // after the captured member (@Value), so the name itself is not part of the contract.
+        predicate.Should().MatchRegex("@[A-Za-z_][A-Za-z0-9_]*");
         predicate.Should().NotContain("müller");
     }
 

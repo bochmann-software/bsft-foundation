@@ -1,7 +1,8 @@
 # Bsft.Correlation.Abstractions
 
 The correlation contract of the `Bsft.Correlation` family: the request-scoped ID a component reads,
-and the header name it travels under. Reference this rather than `Bsft.Correlation` from anything that
+the header name it travels under, and `LogScopeKeys.CorrelationId`, the key of the id in a log scope that
+the producer and the log sinks share. Reference this rather than `Bsft.Correlation` from anything that
 only needs to *read* a correlation ID.
 
 ## Install

@@ -64,8 +64,15 @@ function baseline() {
   }
   files['src/Bsft.Shop.EFCore/Ordering/LineItemEntity.cs'] = type('Bsft.Shop.EFCore.Ordering', 'internal sealed class LineItemEntity { }');
   files['src/Bsft.Shop.EFCore/Ordering/LineItemEntityConfiguration.cs'] = type('Bsft.Shop.EFCore.Ordering', 'internal sealed class LineItemEntityConfiguration { }');
+  files['Directory.Build.props'] = buildProps();
   files['docs/packages.md'] = '| Package | Documented in | Entry point |\n| --- | --- | --- |\n| `Bsft.Shop` | x | `AddBsftShop` |\n| `Bsft.Shop.Abstractions` | x | — |\n| `Bsft.Shop.EFCore` | x | `AddBsftShopEFCore` |\n';
   return files;
+}
+
+// The tier frameworks of Directory.Build.props (PC 1 "Tiers: Foundation and framework").
+function buildProps({ reference = 'net8.0', foundation = 'net8.0;net10.0', framework = 'net8.0;net10.0' } = {}) {
+  const property = (name, value) => (value === null ? '' : `    <${name}>${value}</${name}>\n`);
+  return `<Project>\n  <PropertyGroup>\n${property('BsftReferenceTargetFramework', reference)}${property('BsftFoundationTargetFrameworks', foundation)}${property('BsftFrameworkTargetFrameworks', framework)}  </PropertyGroup>\n</Project>\n`;
 }
 
 function solutionFor(files) {
@@ -98,7 +105,9 @@ function run(files, { solution, foundation: foundationSln, graph } = {}) {
     if (foundationSln !== null) writeFileSync(join(root, 'Bsft.Foundation.sln'), foundationSln ?? foundationSolutionFor(files));
     const repo = readRepository(root);
     const packagesMd = files['docs/packages.md'] ? readFileSync(join(root, 'docs/packages.md'), 'utf8') : undefined;
+    const props = files['Directory.Build.props'] ? readFileSync(join(root, 'Directory.Build.props'), 'utf8') : undefined;
     return runChecks(repo, {
+      buildProps: props,
       solution: readSolution(root, 'Bsft.sln'),
       foundationSolution: readSolution(root, 'Bsft.Foundation.sln'),
       packagesMd,
@@ -247,6 +256,16 @@ test('tier-target: a package, a test project or a sample that names its target f
   only(run(withFiles({ 'src/Bsft.Shop/Bsft.Shop.csproj': framework('<PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include="..\\Bsft.Shop.Abstractions\\Bsft.Shop.Abstractions.csproj" /></ItemGroup>') })), 'tier-target');
   only(run(withFiles({ 'tests/Bsft.Shop.Tests/Bsft.Shop.Tests.csproj': '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>\n' })), 'tier-target');
   assert.deepEqual(run(baseline()).filter((v) => v.rule === 'tier-target'), []);
+});
+
+test('tier-target: a tier without frameworks, or one that leaves out the reference framework', () => {
+  only(run(withFiles({ 'Directory.Build.props': buildProps({ framework: null }) })), 'tier-target');
+  only(run(withFiles({ 'Directory.Build.props': buildProps({ foundation: '' }) })), 'tier-target');
+  only(run(withFiles({ 'Directory.Build.props': buildProps({ reference: null }) })), 'tier-target');
+  only(run(withFiles({ 'Directory.Build.props': buildProps({ framework: 'net10.0' }) })), 'tier-target');
+  only(run(withFiles({ 'Directory.Build.props': buildProps({ foundation: 'net10.0;net12.0' }) })), 'tier-target');
+  // A tier may ship for more frameworks than the other, as long as the reference is one of them.
+  assert.deepEqual(run(withFiles({ 'Directory.Build.props': buildProps({ framework: 'net8.0;net10.0;net12.0' }) })).filter((v) => v.rule === 'tier-target'), []);
 });
 
 test('tier-reference: a Foundation package referencing a framework package; the reverse passes', () => {

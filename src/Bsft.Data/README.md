@@ -34,6 +34,16 @@ services.AddBsftSandboxTenants();
 services.AddSingleton<ISandboxTenantRegistry, MyRegistry>();   // required, and yours
 ```
 
+Each of the three registers the relational-model warm-up as well; a host that uses EF Core without
+any of them adds it on its own with `services.AddBsftDataModelWarmup()`. It builds the
+relational model of each relational context type as the first instance of that type initializes,
+one type at a time, because EF Core's own lazy build can fail when two contexts of a new model run
+their first command at the same moment ("The model must be finalized and its runtime dependencies
+must be initialized before 'GetRelationalModel' can be used") — which is what the first requests after
+a host starts do. It listens from before the first hosted service starts, covers every context however
+it is registered, leaves non-relational providers alone and costs one annotation lookup per context
+once a model is built. `BsftDataOptions.ShouldWarmRelationalModels = false` turns it off.
+
 The unit of work is what the packages that *stage* rather than write commit through — the API key
 expiry reminders and the notification digest sweep among them. A commit is the context's
 `SaveChangesAsync`; a unit is one transaction on its connection, run through the provider's execution
@@ -88,6 +98,7 @@ teardown removes the registry entry plus whatever each registered `ISandboxTenan
 | --- | --- | --- |
 | `BsftDataOptions.MultiTenancy.HeaderName` | `"X-Tenant-Id"` | The request header `HeaderTenantResolver` reads the tenant from. |
 | `BsftDataOptions.MultiTenancy.ClaimType` | `"tenant_id"` | The claim type `ClaimTenantResolver` reads the tenant from. |
+| `BsftDataOptions.ShouldWarmRelationalModels` | `true` | Builds each relational context type's relational model as its first instance initializes, instead of lazily by its first command. `false` keeps EF Core's lazy build. |
 
 Both defaults are `DataDefaults.TenantHeaderName` and `DataDefaults.TenantClaimType`, so the
 authentication stack and the resolver name the same claim without repeating the literal.

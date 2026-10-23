@@ -10,11 +10,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
+    <!-- The background-work pieces (run-once services, bounded pipelines) moved into their own package so
+         a console tool can take them without the web stack below. Referenced here, not re-exported by
+         source, so a host that takes Bsft.Hosting still gets them. -->
+    <ProjectReference Include="..\Bsft.Hosting.BackgroundWork\Bsft.Hosting.BackgroundWork.csproj" />
     <ProjectReference Include="..\Bsft.Correlation\Bsft.Correlation.csproj" />
     <!-- The dependency-free query contracts (the filter AST, the paged request). Deliberately the
          Contracts package and not Bsft.Data: the filter transport only parses the AST, it never
          compiles it, so Bsft.Hosting stays free of the EF Core dependency Bsft.Data would drag in. -->
     <ProjectReference Include="..\Bsft.Data.Contracts\Bsft.Data.Contracts.csproj" />
+    <ProjectReference Include="..\Bsft.Instrumentation\Bsft.Instrumentation.csproj" />
     <ProjectReference Include="..\Bsft.Logging\Bsft.Logging.csproj" />
   </ItemGroup>
 

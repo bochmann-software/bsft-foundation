@@ -24,6 +24,20 @@ public sealed class BsftDataOptions
     /// </summary>
     public MultiTenancyOptions MultiTenancy { get; } = new();
 
+    /// <summary>
+    /// Gets or sets whether the relational model of each relational context type is built as its first
+    /// instance initializes, one context type at a time, instead of lazily by its first command.
+    /// Defaults to <see langword="true"/>.
+    /// </summary>
+    /// <remarks>
+    /// EF Core's lazy build has a race: two contexts of a new model that run their first command at
+    /// the same moment can fail with "The model must be finalized and its runtime dependencies must be
+    /// initialized before 'GetRelationalModel' can be used", which is what the first requests after a
+    /// host starts do. Building the model when the context initializes, under one lock, closes it. Set
+    /// this to <see langword="false"/> only to keep EF Core's own behaviour, for example to measure it.
+    /// </remarks>
+    public bool ShouldWarmRelationalModels { get; set; } = true;
+
     /// <summary>Throws when a configured value cannot be used, naming the member and the value.</summary>
     /// <exception cref="InvalidOperationException">Thrown when a configured value cannot be used.</exception>
     internal void Validate()

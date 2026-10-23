@@ -24,13 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-    - uses: actions/checkout@v5
-    - uses: actions/setup-dotnet@v5
+    - uses: actions/checkout@v7
+    - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: |
           8.0.x
           10.0.x
-    - uses: actions/setup-node@v5
+    - uses: actions/setup-node@v7
       with:
         node-version: '24'
 
@@ -92,7 +92,7 @@ jobs:
 
     - name: Keep the test results of a failed run
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: test-results
         path: TestResults/coverage/**/*.trx
@@ -118,17 +118,17 @@ jobs:
         else
           echo "present=true" >> "$GITHUB_OUTPUT"
         fi
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v7
       if: steps.key.outputs.present == 'true'
       with:
         fetch-depth: 0
-    - uses: actions/setup-dotnet@v5
+    - uses: actions/setup-dotnet@v6
       if: steps.key.outputs.present == 'true'
       with:
         dotnet-version: |
           8.0.x
           10.0.x
-    - uses: actions/setup-node@v5
+    - uses: actions/setup-node@v7
       if: steps.key.outputs.present == 'true'
       with:
         node-version: '24'
@@ -152,6 +152,9 @@ jobs:
         export PATH="$CC_TOOL_PATH:$PATH"
         codecharter graph overview Bsft.sln --top 100000 --format json > "$RUNNER_TEMP/namespace-graph.json"
         node .github/verify-structure.mjs --graph "$RUNNER_TEMP/namespace-graph.json"
+    # A commit without a parent has no changed lines to compare: the first release commit of this
+    # repository is one, and its lines were analysed in the repository it was exported from. The
+    # analysis is skipped there with a notice instead of failing on a diff that cannot exist.
     - name: Determine the diff range
       if: steps.key.outputs.present == 'true'
       id: diff-range
@@ -160,14 +163,17 @@ jobs:
           echo "range=true" >> "$GITHUB_OUTPUT"
         else
           before="${{ github.event.before }}"
-          if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+          if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ]; then
+            echo "range=${before}..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          elif git rev-parse -q --verify HEAD~1 > /dev/null; then
             echo "range=HEAD~1..HEAD" >> "$GITHUB_OUTPUT"
           else
-            echo "range=${before}..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "::notice title=CodeCharter skipped::${{ github.sha }} has no parent, so there are no changed lines to analyse."
+            echo "range=" >> "$GITHUB_OUTPUT"
           fi
         fi
     - uses: bochmann-software/codecharter@v1
-      if: steps.key.outputs.present == 'true'
+      if: steps.key.outputs.present == 'true' && steps.diff-range.outputs.range != ''
       with:
         version: v1.6.4
         solution: Bsft.sln

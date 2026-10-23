@@ -4,11 +4,13 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
+using System.Linq;
 using System.Net;
 using Xunit;
 
@@ -16,7 +18,8 @@ namespace Bsft.Hosting.Tests;
 
 public class BsftExceptionMiddlewareTests
 {
-    private static async Task<IHost> CreateHostAsync(RequestDelegate handler)
+    private static async Task<IHost> CreateHostAsync(
+        RequestDelegate handler, Action<IServiceCollection>? configureServices = null)
     {
         var host = await new HostBuilder()
             .ConfigureWebHost(webBuilder =>
@@ -31,6 +34,7 @@ public class BsftExceptionMiddlewareTests
                         ctx.CorrelationId.Returns("test-correlation-id");
                         return ctx;
                     });
+                    configureServices?.Invoke(services);
                 });
                 webBuilder.Configure(app =>
                 {
@@ -41,6 +45,109 @@ public class BsftExceptionMiddlewareTests
             .StartAsync();
 
         return host;
+    }
+
+    /// <summary>
+    /// A host whose pipeline runs endpoint routing ahead of the middleware, so
+    /// <see cref="HttpContext.GetEndpoint"/> (and its metadata) is populated the way bsft-tower's
+    /// consumer relies on it being: a <c>CustomizeProblemDetails</c> keyed on endpoint metadata needs the
+    /// endpoint to be resolved before the middleware's <see cref="ProblemDetailsContext.HttpContext"/>
+    /// is built.
+    /// </summary>
+    private static async Task<IHost> CreateRoutedHostAsync(
+        RequestDelegate handler, object endpointMetadata, Action<IServiceCollection>? configureServices = null)
+    {
+        var host = await new HostBuilder()
+            .ConfigureWebHost(webBuilder =>
+            {
+                webBuilder.UseTestServer();
+                webBuilder.ConfigureServices(services =>
+                {
+                    services.AddLogging();
+                    services.AddRouting();
+                    services.AddScoped<ICorrelationContext>(_ =>
+                    {
+                        var ctx = Substitute.For<ICorrelationContext>();
+                        ctx.CorrelationId.Returns("test-correlation-id");
+                        return ctx;
+                    });
+                    configureServices?.Invoke(services);
+                });
+                webBuilder.Configure(app =>
+                {
+                    app.UseRouting();
+                    app.UseMiddleware<BsftExceptionMiddleware>();
+                    app.UseEndpoints(endpoints =>
+                    {
+                        endpoints.MapGet("/", handler).WithMetadata(endpointMetadata);
+                    });
+                });
+            })
+            .StartAsync();
+
+        return host;
+    }
+
+    private sealed record RouteOwnerMetadata(string Owner);
+
+    /// <summary>
+    /// Asserts that a ProblemDetails body carries exactly the fields this middleware itself puts there,
+    /// in the order it puts them there, with the values given.
+    /// </summary>
+    /// <remarks>
+    /// Two things vary with the ASP.NET Core version and the JSON options a host configures, neither of
+    /// which this middleware controls once it hands the document to <see cref="IProblemDetailsService"/>:
+    /// the default writer's <c>JavaScriptEncoder</c> (relaxed, so an apostrophe comes back unescaped
+    /// rather than as <c>'</c>) and, since .NET 10, a <c>traceId</c> extension the default writer
+    /// appends on its own. Comparing decoded property values rather than raw bytes, and checking that
+    /// this middleware's own fields appear as an in-order subsequence rather than demanding an exact key
+    /// set, pins the one thing that is actually this middleware's contract — its own fields, values
+    /// and their relative order — without the test breaking on a framework-level detail it was never
+    /// responsible for.
+    /// </remarks>
+    private static void AssertProblemDocument(
+        string json, int expectedStatus, string expectedType, string expectedTitle, string expectedDetail,
+        params (string Key, string Value)[] expectedExtensions)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        root.GetProperty("type").GetString().Should().Be(expectedType);
+        root.GetProperty("title").GetString().Should().Be(expectedTitle);
+        root.GetProperty("status").GetInt32().Should().Be(expectedStatus);
+        root.GetProperty("detail").GetString().Should().Be(expectedDetail);
+
+        foreach (var (key, value) in expectedExtensions)
+            root.GetProperty(key).GetString().Should().Be(value);
+
+        var actualOrder = root.EnumerateObject().Select(p => p.Name).ToList();
+        var expectedOrder = new[] { "type", "title", "status", "detail" }
+            .Concat(expectedExtensions.Select(e => e.Key))
+            .ToList();
+
+        var cursor = 0;
+        foreach (var name in expectedOrder)
+        {
+            var index = actualOrder.IndexOf(name, cursor);
+            index.Should().BeGreaterThanOrEqualTo(
+                cursor, $"'{name}' should appear at or after position {cursor} in {json}");
+            cursor = index + 1;
+        }
+    }
+
+    private sealed class RecordingProblemDetailsWriter : IProblemDetailsWriter
+    {
+        public bool WasInvoked { get; private set; }
+
+        public bool CanWrite(ProblemDetailsContext context) => true;
+
+        public ValueTask WriteAsync(ProblemDetailsContext context)
+        {
+            WasInvoked = true;
+            context.HttpContext.Response.ContentType = "application/problem+json";
+            return new ValueTask(context.HttpContext.Response.WriteAsync(
+                $"{{\"type\":\"custom-writer\",\"status\":{context.ProblemDetails.Status}}}"));
+        }
     }
 
     [Fact]
@@ -477,5 +584,226 @@ public class BsftExceptionMiddlewareTests
 
         await act.Should().ThrowAsync<ArgumentNullException>()
             .WithParameterName("context");
+    }
+
+    // --- IProblemDetailsService integration ---
+    //
+    // The middleware used to serialize mapped exceptions itself, bypassing IProblemDetailsService
+    // entirely, so a host's AddProblemDetails(o => o.CustomizeProblemDetails = ...) or a custom
+    // IProblemDetailsWriter never saw an exception-mapped body. The tests below pin the default shape
+    // (with and without the service registered) and then exercise both customisation seams.
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvokeAsync_NotFoundException_KeepsItsFieldsAndOrderRegardlessOfProblemDetailsRegistration(
+        bool problemDetailsRegistered)
+    {
+        using var host = await CreateHostAsync(
+            _ => throw new NotFoundException("Order", "order-123"),
+            services =>
+            {
+                if (problemDetailsRegistered)
+                    services.AddProblemDetails();
+            });
+
+        var client = host.GetTestClient();
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status404NotFound);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var content = await response.Content.ReadAsStringAsync();
+        AssertProblemDocument(
+            content,
+            StatusCodes.Status404NotFound,
+            "https://httpstatuses.io/404",
+            "Not Found",
+            "Entity 'Order' with identifier 'order-123' was not found.",
+            ("entityType", "Order"),
+            ("entityId", "order-123"),
+            ("errorCode", "NOT_FOUND"),
+            ("correlationId", "test-correlation-id"));
+        await host.StopAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvokeAsync_ConflictException_KeepsItsFieldsAndOrderRegardlessOfProblemDetailsRegistration(
+        bool problemDetailsRegistered)
+    {
+        using var host = await CreateHostAsync(
+            _ => throw new ConflictException("Already exists"),
+            services =>
+            {
+                if (problemDetailsRegistered)
+                    services.AddProblemDetails();
+            });
+
+        var client = host.GetTestClient();
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status409Conflict);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var content = await response.Content.ReadAsStringAsync();
+        AssertProblemDocument(
+            content,
+            StatusCodes.Status409Conflict,
+            "https://httpstatuses.io/409",
+            "Conflict",
+            "Already exists",
+            ("errorCode", "CONFLICT"),
+            ("correlationId", "test-correlation-id"));
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_NotFoundException_WithNoProblemDetailsService_BodyIsByteIdentical()
+    {
+        // The direct-write fallback (no AddProblemDetails registered) is the one path whose body shape
+        // this middleware fully controls, so it is the one path worth pinning byte for byte rather than
+        // through decoded field comparison.
+        using var host = await CreateHostAsync(
+            _ => throw new NotFoundException("Order", "order-123"));
+
+        var client = host.GetTestClient();
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status404NotFound);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var content = await response.Content.ReadAsStringAsync();
+        content.Should().Be(
+            "{\"type\":\"https://httpstatuses.io/404\",\"title\":\"Not Found\",\"status\":404," +
+            "\"detail\":\"Entity \\u0027Order\\u0027 with identifier \\u0027order-123\\u0027 was not found.\"," +
+            "\"entityType\":\"Order\",\"entityId\":\"order-123\",\"errorCode\":\"NOT_FOUND\"," +
+            "\"correlationId\":\"test-correlation-id\"}");
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_NotFoundException_WithCustomizeProblemDetails_AppliesCustomisation()
+    {
+        using var host = await CreateHostAsync(
+            _ => throw new NotFoundException("Order", "order-123"),
+            services => services.AddProblemDetails(options =>
+                options.CustomizeProblemDetails = ctx => ctx.ProblemDetails.Extensions["nodeId"] = "node-1"));
+
+        var client = host.GetTestClient();
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status404NotFound);
+        var content = await response.Content.ReadAsStringAsync();
+        content.Should().Contain("\"nodeId\":\"node-1\"");
+        content.Should().Contain("entityType");
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ConflictException_WithCustomizeProblemDetails_AppliesCustomisation()
+    {
+        using var host = await CreateHostAsync(
+            _ => throw new ConflictException("Already exists"),
+            services => services.AddProblemDetails(options =>
+                options.CustomizeProblemDetails = ctx => ctx.ProblemDetails.Extensions["nodeId"] = "node-1"));
+
+        var client = host.GetTestClient();
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status409Conflict);
+        var content = await response.Content.ReadAsStringAsync();
+        content.Should().Contain("\"nodeId\":\"node-1\"");
+        content.Should().Contain("errorCode");
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_MappedException_WithCustomIProblemDetailsWriter_UsesThatWriter()
+    {
+        var writer = new RecordingProblemDetailsWriter();
+
+        using var host = await CreateHostAsync(
+            _ => throw new ConflictException("Already exists"),
+            services =>
+            {
+                services.AddSingleton<IProblemDetailsWriter>(writer);
+                services.AddProblemDetails();
+            });
+
+        var client = host.GetTestClient();
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status409Conflict);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var content = await response.Content.ReadAsStringAsync();
+        content.Should().Be("{\"type\":\"custom-writer\",\"status\":409}");
+        writer.WasInvoked.Should().BeTrue();
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_NoProblemDetailsServiceRegistered_FallsBackToDirectWrite()
+    {
+        // No AddProblemDetails at all: IProblemDetailsService is not registered, so the middleware must
+        // fall back to the write it has always done rather than throw or produce an empty body.
+        using var host = await CreateHostAsync(
+            _ => throw new NotFoundException("Order", "order-123"));
+
+        var client = host.GetTestClient();
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status404NotFound);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var content = await response.Content.ReadAsStringAsync();
+        content.Should().Contain("\"entityType\":\"Order\"");
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ProblemDetailsServiceRegistered_ButNoWriterCanHandleTheRequest_FallsBackToDirectWrite()
+    {
+        // IProblemDetailsService is registered, but every writer declines (here: the default writer's
+        // CanWrite rejects an Accept header it does not support). TryWriteAsync then returns false, and
+        // the middleware must still answer with its own direct write rather than an empty 404 body.
+        using var host = await CreateHostAsync(
+            _ => throw new NotFoundException("Order", "order-123"),
+            services => services.AddProblemDetails());
+
+        var client = host.GetTestClient();
+        client.DefaultRequestHeaders.Accept.Clear();
+        client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/html"));
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status404NotFound);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var content = await response.Content.ReadAsStringAsync();
+        content.Should().Contain("\"entityType\":\"Order\"");
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_MappedException_EndpointMetadataIsReachableFromCustomizeProblemDetails()
+    {
+        // bsft-tower keys its CustomizeProblemDetails on the endpoint's own metadata (replacing a
+        // body-rewriting middleware with a customisation that only fires for endpoints carrying a
+        // particular marker). The ProblemDetailsContext.HttpContext passed to CustomizeProblemDetails
+        // must therefore still carry the endpoint that routing resolved.
+        string? observedOwner = null;
+
+        using var host = await CreateRoutedHostAsync(
+            _ => throw new ConflictException("Already exists"),
+            new RouteOwnerMetadata("legacy-worker-claims"),
+            services => services.AddProblemDetails(options =>
+                options.CustomizeProblemDetails = ctx =>
+                {
+                    var metadata = ctx.HttpContext.GetEndpoint()?.Metadata.GetMetadata<RouteOwnerMetadata>();
+                    observedOwner = metadata?.Owner;
+                }));
+
+        var client = host.GetTestClient();
+        var response = await client.GetAsync("/");
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status409Conflict);
+        observedOwner.Should().Be("legacy-worker-claims");
+        await host.StopAsync();
     }
 }

@@ -18,8 +18,8 @@
 // DependencyInjection, and the namespaces form no cycle.
 //
 // The tier rules read each package's <Version> (Foundation or framework, PC 1 "Tiers: Foundation and
-// framework") and, when the file exists, Bsft.Foundation.sln, the manifest the public repository is
-// exported from.
+// framework"), the target frameworks of the tiers in Directory.Build.props and, when the file exists,
+// Bsft.Foundation.sln, the manifest the public repository is exported from.
 //
 // Each violation names the rule and the sentence of the conventions it enforces; the rules and
 // their citations are in .github/structure/checks.mjs. Exit code 1 on any violation.
@@ -45,7 +45,9 @@ if (repo.projects.length === 0) {
 }
 
 const packagesPath = join(root, 'docs', 'packages.md');
+const buildPropsPath = join(root, 'Directory.Build.props');
 const { violations, skipped } = runChecks(repo, {
+  buildProps: existsSync(buildPropsPath) ? readFileSync(buildPropsPath, 'utf8') : undefined,
   solution: readSolution(root, 'Bsft.sln'),
   foundationSolution: readSolution(root, 'Bsft.Foundation.sln'),
   packagesMd: existsSync(packagesPath) ? readFileSync(packagesPath, 'utf8') : undefined,

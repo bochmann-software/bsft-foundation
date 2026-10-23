@@ -26,8 +26,8 @@ jobs:
     outputs:
       families: ${{ steps.plan.outputs.families }}
     steps:
-    - uses: actions/checkout@v5
-    - uses: actions/setup-node@v5
+    - uses: actions/checkout@v7
+    - uses: actions/setup-node@v7
       with:
         node-version: '24'
     - name: Derive the matrix
@@ -39,7 +39,7 @@ jobs:
           const plan = JSON.parse(require("node:fs").readFileSync("mutation-plan.json", "utf8"));
           require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `families=${JSON.stringify(plan.families)}\n`);
         '
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: mutation-plan
         path: mutation-plan.json
@@ -55,16 +55,16 @@ jobs:
       matrix:
         family: ${{ fromJSON(needs.plan.outputs.families) }}
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v7
     # The packages target net8.0 and net10.0; stryker-config.json mutates against net8.0 (a mutant is
     # a change to the source, the same on either framework), and dotnet-stryker 5 itself runs on
     # net10.0 and does not roll forward.
-    - uses: actions/setup-dotnet@v5
+    - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: |
           8.0.x
           10.0.x
-    - uses: actions/setup-node@v5
+    - uses: actions/setup-node@v7
       with:
         node-version: '24'
     - name: Restore the Stryker tool
@@ -73,7 +73,7 @@ jobs:
     # connection window.
     - name: Mutation test the family
       run: node .github/mutation-family-run.mjs --family "${{ matrix.family }}" --out "results/${{ matrix.family }}" --concurrency 4
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       if: always()
       with:
         name: mutation-results-${{ matrix.family }}
@@ -87,11 +87,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v5
-    - uses: actions/setup-node@v5
+    - uses: actions/checkout@v7
+    - uses: actions/setup-node@v7
       with:
         node-version: '24'
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         path: artifacts
     - name: Merge the per-family results

@@ -224,10 +224,11 @@ Wire and persisted names (JSON property names, configuration keys, table and col
 | SignIn / Login | SignIn = cookie session operation. Login = OIDC/Identity page and flow. | LogIn, LogOut, Signin | `SignInAsync`, `LoginPath` |
 | AI | The AI package family and token. | Ai | `Bsft.AI`, `AIDefaults` |
 | EFCore | EF Core provider packages and types. | EfCore, Ef | `Bsft.Chat.EFCore`, `EFCoreSagaStore` |
+| ClientApp | A browser application whose files a server host serves: the host page, its static assets and the version endpoint (`Bsft.Hosting.ClientApp`). Not the BFF, which holds the session for such an application. | | `Bsft.Hosting.ClientApp`, `ClientAppDefaults` |
 
 ¹ `Settings` stays as the name of `Bsft.Settings` (stored runtime settings, a distinct concept from configuration).
 
-Fixed (standards and Microsoft names, never renamed): `OAuth`, `Oidc`, `WebAuthn`, `Scim`, `Jwt`, `Totp`, `p256dh`, `acr`, `amr`, `alg`, `sub`, `ack`/`nack`, `IKeyRing`, `IFeatureManager`, `KeyRing`, `Usernameless` (the WebAuthn usernameless ceremony), `RabbitMQ`, `SignalR`.
+Fixed (standards and Microsoft names, never renamed): `OAuth`, `Oidc`, `WebAuthn`, `Scim`, `Jwt`, `Totp`, `p256dh`, `acr`, `amr`, `alg`, `sub`, `ack`/`nack`, `IKeyRing`, `IFeatureManager`, `KeyRing`, `Usernameless` (the WebAuthn usernameless ceremony), `RabbitMQ`, `SignalR`, `Bff` (backend for frontend, named by the IETF draft *OAuth 2.0 for Browser-Based Applications*; written `Bff` per N1.2: `Bsft.Auth.Bff`, `BsftBffOptions`).
 
 ## Feature-folder vocabulary
 

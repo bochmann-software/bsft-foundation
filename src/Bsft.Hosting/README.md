@@ -12,10 +12,12 @@ dotnet add package Bsft.Hosting
 ```
 
 Requires `Bsft.Core`, `Bsft.Correlation`, `Bsft.Data.Contracts` (the filter AST the transport parses,
-deliberately not `Bsft.Data`, so this package stays free of EF Core) and `Bsft.Logging` (the file
-provider the host logging policy switches on). It carries a `FrameworkReference` to
+deliberately not `Bsft.Data`, so this package stays free of EF Core), `Bsft.Logging` (the file
+provider the host logging policy switches on) and `Bsft.Hosting.BackgroundWork`, which holds the
+background-work pieces below. It carries a `FrameworkReference` to
 `Microsoft.AspNetCore.App` plus Swashbuckle and Asp.Versioning, so a worker or console host should
-reference the individual packages it needs rather than this one.
+reference the individual packages it needs rather than this one: a console tool that only wants the
+background work takes `Bsft.Hosting.BackgroundWork`.
 
 ## Register
 
@@ -40,7 +42,8 @@ pair — `AddBsftCors`, `AddBsftSwagger`, `AddBsftApiVersioning`, `AddBsftRateLi
 `AddBsftFilterTransport`, `AddBsftHealthChecks`, `AddBsftStartupValidation` — so a host can compose
 the pipeline itself.
 
-Background work has its own pair, registered on its own:
+Background work lives in `Bsft.Hosting.BackgroundWork`, which this package references, and has its own pair,
+registered on its own (`using Bsft.Hosting.BackgroundWork.DependencyInjection;`):
 
 ```csharp
 services.AddBsftBackgroundWorkRunOnce<RegisterInstanceService>(configuration);
@@ -51,6 +54,18 @@ the host stops, with the backoff in named `BsftRunOnceOptions` and every wait on
 `TimeProvider`. `IServiceScopeFactory.RunScopedAsync` / `RunScoped` run one operation against one
 scoped service and dispose the scope afterwards on every path, including the one where the operation
 threw.
+
+A hot path hands items to a background writer without ever waiting through a bounded pipeline:
+
+```csharp
+services.AddBsftBatchingWriter<UsageRecord, UsageBatchCommitter>(configuration)
+        .AddBsftPipelineEnrichment<UsageRecord, UsageEnricher>(); // optional, after the writer
+// producers inject IBoundedBuffer<UsageRecord> (or IEnrichmentStage<UsageRecord>) and call TryEnqueue
+```
+
+`TryEnqueue` drops and counts when the buffer is full, a failing batch is logged and skipped, and the
+stop flush has its own deadline. Options live under `Bsft:Hosting:Pipelines:<item type full name>`
+(`BsftBoundedPipelineOptions`); counters are read through `IPipelineCounters<TItem>`.
 
 ## Configure
 
@@ -82,6 +97,9 @@ passed alongside runs after the section, so code wins where code spoke.
 | `BsftHostLoggingOptions.EnableConsole` / `EnableDebug` | `true` | Which providers the host switches on. |
 | `BsftRateLimitingOptions.PermitLimit` (`Bsft:Hosting:RateLimiting`) | `100` | Requests per window. At least one. |
 | `BsftRateLimitingOptions.WindowSeconds` | `60` | Length of the fixed window. At least one. |
+| `BsftRateLimitingOptions.RetryAfterSeconds` | `1` | `Retry-After` of a rejection whose limiter cannot estimate one (a concurrency limiter). At least one. |
+| `BsftRateLimitingOptions.Policies` (`...:RateLimiting:Policies:<name>`) | empty | Named policies, each a chain of `Limiters` a request has to pass all of. See below. |
+| `BsftRateLimitingOptions.PartitionKeySelectors` | empty | Code only: named `Func<HttpContext, string?>` a `Custom` limiter refers to. |
 | `BsftSwaggerOptions.Title` (`Bsft:Hosting:Swagger`) | entry assembly name | Document title. Must not be blank. |
 | `BsftSwaggerOptions.Version` | `"v1"` | Document version, and the document's name. Must not be blank. |
 | `BsftSwaggerOptions.IsBearerAuthEnabled` | `false` | Adds the bearer scheme. `AddBearerAuth()` is the fluent way of setting it. |
@@ -93,7 +111,8 @@ passed alongside runs after the section, so code wins where code spoke.
 Validation: the filter transport bounds are checked eagerly at `AddBsftFilterTransport` and again on
 start — every bound must be positive and `MaxJsonReaderDepth` must be at least `MaxDepth`, otherwise
 the reader rejects a filter before the friendlier AST check can. On start, a blank CORS origin, a
-non-positive rate-limit value, a blank Swagger title or version and a negative default API version are
+non-positive rate-limit value or an inconsistent named rate-limiting policy (named by its configuration path),
+a blank Swagger title or version and a negative default API version are
 each rejected, naming the member.
 
 `BsftHostLoggingOptions.FileLogging(...)` carries a delegate and `BsftHealthCheckConfiguration` the
@@ -106,13 +125,36 @@ different shapes out of one section.
 (`"BsftCorsPolicy"`), `RateLimitingPolicyName` (`"BsftFixedWindow"`, which endpoints must ask for by
 name — the limiter is not applied globally) and `ConsoleFormatterName` (`"bsft"`).
 
+A named policy is a chain of limiters (`PolicyLimiterOptions`): `Kind` is `FixedWindow`, `SlidingWindow`,
+`TokenBucket` or `Concurrency`, `PartitionBy` is `ClientAddress`, `Principal` (claim `ClaimType`, default
+`NameIdentifier`; anonymous falls back to the address), `Custom` (a selector of `PartitionKeySelectors`) or
+`Global`. An app declares, say, three uploads in flight per guest and 64 overall from configuration alone:
+
+```json
+"Bsft": { "Hosting": { "RateLimiting": { "Policies": {
+  "upload-streams": { "Limiters": [
+    { "Kind": "Concurrency", "PartitionBy": "Principal", "PermitLimit": 3 },
+    { "Kind": "Concurrency", "PartitionBy": "Global", "PermitLimit": 64, "RetryAfterSeconds": 5 } ] }
+} } } }
+```
+
+and maps `group.RequireRateLimiting("upload-streams")`. A rejection is a 429 with `Retry-After` and a
+ProblemDetails body carrying `errorCode` `RATE_LIMITED` (`HostingDefaults.RateLimitedErrorCode`), counted on
+`bsft.rate_limiting.rejections` per policy. A principal partition needs authentication to run before
+`UseBsftRateLimiting`. Details in [docs/hosting.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/hosting.md#rate-limiting).
+
+`UseBsftRateLimiting` needs `AddBsftRateLimiting` (or `AddBsftDefaults`). ASP.NET Core never disposes its rate
+limiting middleware's endpoint limiter nor `RateLimiterOptions.GlobalLimiter`, and each runs a timer that would
+keep a stopped host reachable; the container disposes both when the host is disposed. A global limiter therefore
+belongs to one host and is not shared between hosts.
+
 ## Extend
 
 `IFilterQueryParser` (how the `filter` query value becomes a filter AST, and which transport bounds
 reject it) is registered with `TryAdd`, so a host that registered its own parser keeps it.
 `IStartupValidator` from `Bsft.Core` is the open seam of startup validation: this package contributes
 `ConfigurationValidator` and the hosted service that runs every registered validator, and any package
-or application may add its own. `BsftHealthCheckConfiguration` composes health checks from the
+or application may add its own. `IObserverFailureReporter` and `IObserverGuard` from `Bsft.Core` are registered by `AddBsftObservers` with `TryAdd`, so a host that registered its own keeps it. `BsftHealthCheckConfiguration` composes health checks from the
 outside. Nothing else here is replaceable — the middleware, the console formatter and the per-feature
 registrations are concrete on purpose.
 

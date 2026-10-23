@@ -1,8 +1,10 @@
-using System.Threading.RateLimiting;
+using Bsft.Instrumentation.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace Bsft.Hosting.DependencyInjection;
 
@@ -12,7 +14,8 @@ namespace Bsft.Hosting.DependencyInjection;
 public static class RateLimitingServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds fixed window rate limiting per client IP address.
+    /// Adds rate limiting: the default fixed window per client IP address and the named policies of
+    /// <see cref="BsftRateLimitingOptions.Policies"/>, with a 429 ProblemDetails answer carrying <c>Retry-After</c>.
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="configure">An optional action to configure <see cref="BsftRateLimitingOptions"/>.</param>
@@ -28,7 +31,8 @@ public static class RateLimitingServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Adds fixed window rate limiting per client IP address, bound from configuration.
+    /// Adds rate limiting as <see cref="AddBsftRateLimiting(IServiceCollection, Action{BsftRateLimitingOptions}?)"/>
+    /// does, bound from configuration, named policies included (<c>Bsft:Hosting:RateLimiting:Policies</c>).
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="configuration">The configuration carrying the <c>Bsft:Hosting:RateLimiting</c> section.</param>
@@ -53,6 +57,11 @@ public static class RateLimitingServiceCollectionExtensions
     /// <param name="configuration">The configuration to bind from, or <see langword="null"/>.</param>
     /// <param name="configure">Adjusts what the section bound.</param>
     /// <returns>The service collection for chaining.</returns>
+    /// <remarks>
+    /// The policies are built from <see cref="BsftRateLimitingOptions"/> when ASP.NET Core first reads its
+    /// <see cref="RateLimiterOptions"/>, so they see every <c>Configure</c> a host registered and the
+    /// validation runs before a policy is built. Calling this twice registers the policies once.
+    /// </remarks>
     internal static IServiceCollection Add(
         IServiceCollection services, IConfiguration? configuration, Action<BsftRateLimitingOptions>? configure)
     {
@@ -62,57 +71,24 @@ public static class RateLimitingServiceCollectionExtensions
             configure?.Invoke(target);
         }
 
-        var options = new BsftRateLimitingOptions();
-        Apply(options);
-
         services.AddOptions<BsftRateLimitingOptions>().Configure(Apply).ValidateDataAnnotations().ValidateOnStart();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<BsftRateLimitingOptions>, BsftRateLimitingOptionsValidator>());
 
-        services.AddRateLimiter(limiterOptions =>
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddBsftInstrumentationSource(ConfiguredRateLimitPolicies.InstrumentationSourceName);
+
+        if (!services.Any(descriptor => descriptor.ServiceType == typeof(ConfiguredRateLimitPolicies)))
         {
-            limiterOptions.AddPolicy(
-                HostingDefaults.RateLimitingPolicyName,
-                context => RateLimitPartition.GetFixedWindowLimiter(
-                    ClientKey(context),
-                    _ => new FixedWindowRateLimiterOptions
-                    {
-                        PermitLimit = options.PermitLimit,
-                        Window = TimeSpan.FromSeconds(options.WindowSeconds),
-                        QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                        QueueLimit = 0
-                    }));
+            services.AddSingleton<ConfiguredRateLimitPolicies>();
+            services.AddRateLimiter(_ => { });
+            services.AddOptions<RateLimiterOptions>()
+                .Configure<ConfiguredRateLimitPolicies>((limiterOptions, policies) => policies.ApplyTo(limiterOptions));
+        }
 
-            limiterOptions.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-        });
+        // Disposes the middleware's limiters with the container; UseBsftRateLimiting hands them over.
+        services.TryAddSingleton<RateLimiterRelease>();
 
         return services;
     }
-
-    /// <summary>
-    /// Works out which bucket a request counts against.
-    /// </summary>
-    /// <param name="context">The request being limited.</param>
-    /// <returns>The partition key.</returns>
-    /// <remarks>
-    /// <para>
-    /// The remote address, so that one caller exhausting its permits costs that caller and nobody
-    /// else. A single limiter shared by the whole policy would be the opposite of a rate limit: the
-    /// first client to spend the budget would lock every other client out of the endpoint for the
-    /// rest of the window, which is a denial of service anyone can trigger.
-    /// </para>
-    /// <para>
-    /// Behind a reverse proxy the remote address is the proxy's, and every caller lands in one
-    /// bucket again. A host deployed that way configures the forwarded-headers middleware so that
-    /// the address reaching here is the client's; this package does not enable it, because trusting
-    /// a forwarded header without knowing which hop set it is how a caller gets to choose its own
-    /// bucket.
-    /// </para>
-    /// </remarks>
-    private static string ClientKey(HttpContext context)
-        => context.Connection.RemoteIpAddress?.ToString() ?? UnattributableClientKey;
-
-    /// <summary>
-    /// The bucket for a request that carries no remote address, as one over a pipe or an in-memory
-    /// test server does. They share it rather than each getting a budget of their own.
-    /// </summary>
-    private const string UnattributableClientKey = "unattributable";
 }

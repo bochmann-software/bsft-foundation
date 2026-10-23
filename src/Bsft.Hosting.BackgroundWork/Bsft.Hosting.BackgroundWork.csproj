@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework background work without the web stack: run-once startup operations with retry, and bounded, never-blocking batching pipelines. No ASP.NET Core, Swashbuckle or API-versioning dependency, so a console tool or CLI can use it.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Hosting.BackgroundWork.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bsft.Instrumentation\Bsft.Instrumentation.csproj" />
+  </ItemGroup>
+
+  <!-- No FrameworkReference on Microsoft.AspNetCore.App and none of the packages Bsft.Hosting adds for
+       the web host: this package is what a console tool takes when it only wants the pipelines. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <!-- Microsoft.Extensions.Hosting, not only its Abstractions: the options validator reads HostOptions, which
+         the host package declares. It is the generic host and carries no web stack. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+</Project>

@@ -9,10 +9,13 @@ namespace Bsft.Hosting.Tests.Logging;
 
 public class ConsoleFormatterTests
 {
-    private static BsftConsoleFormatter CreateFormatter(bool useUtc = false)
+    private static BsftConsoleFormatter CreateFormatter(bool useUtc = false, params string[] extraKeys)
     {
         var options = Substitute.For<IOptionsMonitor<BsftConsoleFormatterOptions>>();
         var formatterOptions = new BsftConsoleFormatterOptions { UseUtcTimestamp = useUtc };
+        foreach (var key in extraKeys)
+            formatterOptions.PersistedScopeKeys.Add(key);
+
         options.CurrentValue.Returns(formatterOptions);
         options.OnChange(Arg.Any<Action<BsftConsoleFormatterOptions, string?>>()).Returns((IDisposable?)null);
         return new BsftConsoleFormatter(options);
@@ -389,6 +392,131 @@ public class ConsoleFormatterTests
     /// <summary>
     /// A test scope provider that provides one scope object.
     /// </summary>
+    [Fact]
+    public void Write_WithConfiguredKeys_ShowsTheInnermostValuesInTheSameBlockAsTheFile()
+    {
+        using var formatter = CreateFormatter(false, "RunId", "Tenant");
+        var writer = new StringWriter();
+        var scopes = new ScopeList(
+            new Dictionary<string, object> { ["CorrelationId"] = "req-1", ["RunId"] = "outer", ["Tenant"] = "a;b\r\nc" },
+            new List<KeyValuePair<string, object>> { new("RunId", "inner"), new("Other", "ignored"), new("Nothing", null!) });
+
+        formatter.Write(Entry(), scopes, writer);
+
+        writer.ToString().Should().Contain("] [req-1] {RunId=inner;Tenant=a\\;b c} Cat: message");
+    }
+
+    [Fact]
+    public void Write_WithAHostileCorrelationId_EscapesTheSlot()
+    {
+        using var formatter = CreateFormatter(false, "RunId");
+        var writer = new StringWriter();
+        var scopes = new ScopeList(new Dictionary<string, object> { ["CorrelationId"] = "evil] {RunId=victim}" });
+
+        formatter.Write(Entry(), scopes, writer);
+
+        writer.ToString().Should().Contain("[evil\\] {RunId=victim}] Cat: message");
+    }
+
+    [Fact]
+    public void Write_WithNullValuesAndOnlyTheCorrelationKey_FallsBackToTheMarkerAndNoBlock()
+    {
+        using var formatter = CreateFormatter();
+        var writer = new StringWriter();
+        var scopes = new ScopeList(new Dictionary<string, object> { ["CorrelationId"] = null! });
+
+        formatter.Write(Entry(), scopes, writer);
+
+        writer.ToString().Should().Contain("] [-] Cat: message");
+    }
+
+    [Fact]
+    public void Write_WithAConfiguredKeyWhoseValueIsNull_ShowsAnEmptyValue()
+    {
+        using var formatter = CreateFormatter(false, "Nothing");
+        var writer = new StringWriter();
+        var scopes = new ScopeList(new List<KeyValuePair<string, object>> { new("Nothing", null!) });
+
+        formatter.Write(Entry(), scopes, writer);
+
+        writer.ToString().Should().Contain("] [-] {Nothing=} Cat: message");
+    }
+
+    [Fact]
+    public void Write_WithAKeyHoldingLineBreaks_MatchesTheFlattenedKeyAndNeverBreaksTheLine()
+    {
+        using var formatter = CreateFormatter(false, "Run\r\nId");
+        var writer = new StringWriter();
+        var scopes = new ScopeList(new Dictionary<string, object> { ["Run Id"] = "r1" });
+
+        formatter.Write(Entry(), scopes, writer);
+
+        writer.ToString().Should().Contain("{Run Id=r1}");
+    }
+
+    [Fact]
+    public void Write_WhenTheKeyListIsMissing_ShowsTheCorrelationIdOnly()
+    {
+        var monitor = Substitute.For<IOptionsMonitor<BsftConsoleFormatterOptions>>();
+        monitor.CurrentValue.Returns(new BsftConsoleFormatterOptions { PersistedScopeKeys = null! });
+        using var formatter = new BsftConsoleFormatter(monitor);
+        var writer = new StringWriter();
+        var scopes = new ScopeList(new Dictionary<string, object> { ["CorrelationId"] = "c1", ["RunId"] = "r" });
+
+        formatter.Write(Entry(), scopes, writer);
+
+        writer.ToString().Should().Contain("] [c1] Cat: message");
+    }
+
+    [Fact]
+    public void Write_AfterTheOptionsChange_UsesTheNewKeys()
+    {
+        Action<BsftConsoleFormatterOptions, string?>? listener = null;
+        var monitor = Substitute.For<IOptionsMonitor<BsftConsoleFormatterOptions>>();
+        monitor.CurrentValue.Returns(new BsftConsoleFormatterOptions());
+        monitor.OnChange(Arg.Do<Action<BsftConsoleFormatterOptions, string?>>(action => listener = action)).Returns((IDisposable?)null);
+        using var formatter = new BsftConsoleFormatter(monitor, new Bsft.Logging.Sinks.ScopeLineEncoder());
+        var changed = new BsftConsoleFormatterOptions();
+        changed.PersistedScopeKeys.Add("RunId");
+        listener!(changed, null);
+        var writer = new StringWriter();
+
+        formatter.Write(Entry(), new ScopeList(new Dictionary<string, object> { ["RunId"] = "r9" }), writer);
+
+        writer.ToString().Should().Contain("{RunId=r9}");
+    }
+
+    [Fact]
+    public void Constructor_WithoutAnEncoder_Throws()
+    {
+        var monitor = Substitute.For<IOptionsMonitor<BsftConsoleFormatterOptions>>();
+
+        var act = () => new BsftConsoleFormatter(monitor, (Bsft.Logging.Sinks.IScopeLineEncoder)null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    private static LogEntry<string> Entry()
+        => new(LogLevel.Information, "Cat", new EventId(0), "state", null, (state, ex) => "message");
+
+    private sealed class ScopeList : IExternalScopeProvider
+    {
+        private readonly object[] _scopes;
+
+        public ScopeList(params object[] scopes)
+        {
+            _scopes = scopes;
+        }
+
+        public void ForEachScope<TState>(Action<object?, TState> callback, TState state)
+        {
+            foreach (var scope in _scopes)
+                callback(scope, state);
+        }
+
+        public IDisposable Push(object? state) => throw new NotSupportedException();
+    }
+
     private sealed class TestScopeProvider : IExternalScopeProvider
     {
         private readonly object _scopeState;

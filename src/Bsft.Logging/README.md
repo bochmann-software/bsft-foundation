@@ -10,7 +10,7 @@ what has outlived its retention.
 dotnet add package Bsft.Logging
 ```
 
-No further Bsft packages; it depends on `Microsoft.Extensions.Logging` and its console provider.
+It depends on `Microsoft.Extensions.Logging` and its console provider, and on `Bsft.Correlation.Abstractions` (no dependencies of its own) for the `LogScopeKeys.CorrelationId` scope key.
 
 ## Register
 

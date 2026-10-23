@@ -16,8 +16,8 @@ dependencies. They are split by tier
 
 `Bsft.Testing` depends on no `Bsft.Auth` package, so a Foundation test project
 can use it; an application on `Bsft.Auth` adds `Bsft.Auth.Testing`, which brings
-`Bsft.Testing` along. Until 2.0.0 everything was in `Bsft.Testing`; see
-[the 2.1.0 migration notes](migration-2.1.0.md) for the move.
+`Bsft.Testing` along. Until 2.0.0 everything was in `Bsft.Testing`;
+the migration notes describe the move.
 
 The types of `Bsft.Testing` live in namespaces by role: the context doubles in
 `Bsft.Testing.Contexts`, the clock in `Bsft.Testing.Time`, the mediator harness in

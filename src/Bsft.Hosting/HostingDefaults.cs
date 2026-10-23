@@ -29,7 +29,30 @@ public static class HostingDefaults
     public const string RateLimitingPolicyName = "BsftFixedWindow";
 
     /// <summary>
+    /// The <c>errorCode</c> of the ProblemDetails body of a request the rate limiter rejected with 429.
+    /// </summary>
+    public const string RateLimitedErrorCode = "RATE_LIMITED";
+
+    /// <summary>
+    /// The counter, on the <c>Bsft.Hosting</c> instrumentation source, that counts rejected requests per
+    /// rate limiting policy (tag <c>policy</c>: the policy's name, or <c>global</c> for a rejection by
+    /// <c>RateLimiterOptions.GlobalLimiter</c> or by a policy without a name).
+    /// </summary>
+    public const string RateLimitRejectionsInstrument = "bsft.rate_limiting.rejections";
+
+    /// <summary>
     /// The name under which <c>BsftConsoleFormatter</c> is registered with the console logger.
     /// </summary>
     public const string ConsoleFormatterName = "bsft";
+
+    /// <summary>
+    /// The name of the instrumentation source the bounded pipelines of
+    /// <c>Bsft.Hosting.BackgroundWork.Pipelines</c> emit their <c>bsft.pipeline.items</c> counter on.
+    /// </summary>
+    /// <remarks>
+    /// The pipelines moved to <c>Bsft.Hosting.BackgroundWork</c>, which owns the name now as
+    /// <see cref="Bsft.Hosting.BackgroundWork.BackgroundWorkDefaults.PipelineInstrumentationSourceName"/>; this
+    /// constant stays so existing code compiles, and carries the same value.
+    /// </remarks>
+    public const string PipelineInstrumentationSourceName = BackgroundWork.BackgroundWorkDefaults.PipelineInstrumentationSourceName;
 }

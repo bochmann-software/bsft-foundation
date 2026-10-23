@@ -133,6 +133,189 @@ public sealed class LogFileReaderTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadAsync_WhenCorrelationIdIsSet_ReturnsOnlyEntriesWithThatExactId()
+    {
+        Write(
+            "app-2026-06-15.log",
+            "[2026-06-15 09:00:00.000 INF] [abc-1] Category: first\n"
+            + "[2026-06-15 10:00:00.000 INF] [abc-12] Category: longer id\n"
+            + "[2026-06-15 11:00:00.000 INF] [ABC-1] Category: other case\n"
+            + "[2026-06-15 12:00:00.000 INF] [-] Category: uncorrelated\n"
+            + "[2026-06-15 13:00:00.000 ERR] [abc-1] Category: second\nSystem.Exception: boom\n");
+
+        var page = await CreateReader().ReadAsync(new LogReadRequest { CorrelationId = "abc-1" });
+
+        page.Entries.Select(entry => entry.Message).Should().Equal("second", "first");
+    }
+
+    [Fact]
+    public async Task ReadAsync_WhenCorrelationIdIsSetOnJsonEntries_ReturnsOnlyMatchingEntries()
+    {
+        Write(
+            "app-2026-06-15.log",
+            "{\"timestamp\":\"2026-06-15T10:00:00.000+00:00\",\"level\":\"Information\",\"correlationId\":\"wanted\",\"category\":\"C\",\"message\":\"hit\"}\n"
+            + "{\"timestamp\":\"2026-06-15T11:00:00.000+00:00\",\"level\":\"Information\",\"correlationId\":\"other\",\"category\":\"C\",\"message\":\"miss\"}\n"
+            + "{\"timestamp\":\"2026-06-15T12:00:00.000+00:00\",\"level\":\"Information\",\"category\":\"C\",\"message\":\"none\"}\n");
+
+        var page = await CreateReader().ReadAsync(new LogReadRequest { CorrelationId = "wanted" });
+
+        page.Entries.Select(entry => entry.Message).Should().Equal("hit");
+    }
+
+    [Fact]
+    public async Task ReadAsync_WhenCorrelationIdIsBlank_AppliesNoCorrelationFilter()
+    {
+        Write(
+            "app-2026-06-15.log",
+            "[2026-06-15 09:00:00.000 INF] [a] Category: one\n"
+            + "[2026-06-15 10:00:00.000 INF] [b] Category: two\n");
+
+        var page = await CreateReader().ReadAsync(new LogReadRequest { CorrelationId = "  " });
+
+        page.Entries.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ReadAsync_WhenCorrelationIdCombinesWithLevelSearchAndPaging_FiltersAndPagesTheMatches()
+    {
+        Write(
+            "app-2026-06-15.log",
+            "[2026-06-15 08:00:00.000 WRN] [c1] Category: needle one\n"
+            + "[2026-06-15 09:00:00.000 WRN] [c2] Category: needle foreign\n"
+            + "[2026-06-15 10:00:00.000 INF] [c1] Category: needle low level\n"
+            + "[2026-06-15 11:00:00.000 WRN] [c1] Category: needle two\n"
+            + "[2026-06-15 12:00:00.000 WRN] [c1] Category: unrelated\n"
+            + "[2026-06-15 13:00:00.000 WRN] [c1] Category: needle three\n");
+        var reader = CreateReader();
+        var query = new LogReadRequest(
+            PageSize: 2,
+            MinimumLevel: LogLevel.Warning,
+            SearchText: "needle")
+        {
+            CorrelationId = "c1",
+        };
+
+        var first = await reader.ReadAsync(query);
+        var second = await reader.ReadAsync(query with { Before = first.NextBefore });
+
+        first.Entries.Select(entry => entry.Message).Should().Equal("needle three", "needle two");
+        second.Entries.Select(entry => entry.Message).Should().Equal("needle one");
+        second.NextBefore.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TailAsync_WhenCorrelationIdIsSet_YieldsOnlyMatchingNewEntries()
+    {
+        const string name = "app-2026-06-15.log";
+        Write(name, "[2026-06-15 10:00:00.000 INF] [mine] Category: existing\n");
+        var options = LogFileFixture.Options();
+        options.LogDirectory = _fixture.LogDirectory;
+        options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
+        var reader = new LogFileReader(options, TimeProvider.System);
+        var current = await reader.ReadAsync(new LogReadRequest(1) { CorrelationId = "mine" });
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var tail = reader.TailAsync(
+                new LogReadRequest(Before: current.Entries[0].Sequence) { CorrelationId = "mine" },
+                cancellation.Token)
+            .GetAsyncEnumerator(cancellation.Token);
+
+        var pending = tail.MoveNextAsync().AsTask();
+        File.AppendAllText(
+            Path.Combine(_fixture.LogDirectory, name),
+            "[2026-06-15 11:00:00.000 INF] [theirs] Category: foreign\n"
+            + "[2026-06-15 12:00:00.000 INF] [mine] Category: appended\n");
+
+        (await pending).Should().BeTrue();
+        tail.Current.Message.Should().Be("appended");
+    }
+
+    [Fact]
+    public async Task ReadAsync_WhenEntriesWereLoggedOutsideAnyScope_ReportsNoCorrelationId()
+    {
+        Write(
+            "app-2026-06-15.log",
+            "[2026-06-15 09:00:00.000 INF] [-] Category: text outside\n"
+            + "[2026-06-15 10:00:00.000 INF] [] Category: text empty\n"
+            + "{\"timestamp\":\"2026-06-15T11:00:00.000+00:00\",\"level\":\"Information\",\"correlationId\":\"-\",\"category\":\"C\",\"message\":\"json outside\"}\n"
+            + "{\"timestamp\":\"2026-06-15T12:00:00.000+00:00\",\"level\":\"Information\",\"correlationId\":\"\",\"category\":\"C\",\"message\":\"json empty\"}\n");
+
+        var page = await CreateReader().ReadAsync(new LogReadRequest(10));
+
+        page.Entries.Should().HaveCount(4);
+        page.Entries.Should().OnlyContain(entry => !entry.IsMalformed);
+        page.Entries.Select(entry => entry.CorrelationId).Should().AllSatisfy(id => id.Should().BeNull());
+    }
+
+    [Fact]
+    public async Task ReadAsync_WhenTheFilterIsTheNoScopeSentinel_MatchesNothing()
+    {
+        Write("app-2026-06-15.log", "[2026-06-15 09:00:00.000 INF] [-] Category: outside\n");
+
+        var page = await CreateReader().ReadAsync(new LogReadRequest { CorrelationId = "-" });
+
+        page.Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TailAsync_WhenNoCursorIsGivenAndACorrelationIdIsSet_YieldsOnlyMatchingEntriesAppendedLater()
+    {
+        const string name = "app-2026-06-15.log";
+        Write(name, "[2026-06-15 10:00:00.000 INF] [mine] Category: existing\n");
+        var access = new CountingLogFileAccess();
+        var options = LogFileFixture.Options();
+        options.LogDirectory = _fixture.LogDirectory;
+        options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
+        var reader = new LogFileReader(options, TimeProvider.System, access);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var tail = reader.TailAsync(new LogReadRequest { CorrelationId = "mine" }, cancellation.Token)
+            .GetAsyncEnumerator(cancellation.Token);
+
+        var pending = tail.MoveNextAsync().AsTask();
+        await access.WaitForOpensAsync(2, cancellation.Token);
+        File.AppendAllText(
+            Path.Combine(_fixture.LogDirectory, name),
+            "[2026-06-15 11:00:00.000 INF] [theirs] Category: foreign\n"
+            + "[2026-06-15 12:00:00.000 INF] [mine] Category: appended\n");
+
+        (await pending).Should().BeTrue();
+        tail.Current.Message.Should().Be("appended");
+    }
+
+    [Fact]
+    public async Task TailAsync_WhenTheFilterMatchesNothing_ReadsOnlyTheNewestChunkPerPoll()
+    {
+        const int lines = 9000;
+        var content = new StringBuilder();
+        for (var index = 0; index < lines; index++)
+        {
+            content.Append("[2026-06-15 10:00:00.000 INF] [other] Category: ")
+                .Append(index.ToString("D6", System.Globalization.CultureInfo.InvariantCulture))
+                .Append(" padding padding padding padding padding padding padding padding\n");
+        }
+
+        Write("app-2026-06-15.log", content.ToString());
+        var fileLength = new FileInfo(Path.Combine(_fixture.LogDirectory, "app-2026-06-15.log")).Length;
+        fileLength.Should().BeGreaterThan(4 * 64 * 1024);
+        var access = new CountingLogFileAccess();
+        var options = LogFileFixture.Options();
+        options.LogDirectory = _fixture.LogDirectory;
+        options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
+        var reader = new LogFileReader(options, TimeProvider.System, access);
+        using var cancellation = new CancellationTokenSource();
+        await using var tail = reader.TailAsync(new LogReadRequest { CorrelationId = "absent" }, cancellation.Token)
+            .GetAsyncEnumerator(cancellation.Token);
+
+        var pending = tail.MoveNextAsync().AsTask();
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await access.WaitForOpensAsync(4, guard.Token);
+        cancellation.Cancel();
+        var act = async () => await pending;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        (access.BytesRead / access.Opens).Should().BeLessThan(fileLength / 2);
+    }
+
+    [Fact]
     public async Task ReadAsync_WhenDirectoryIsMissingOrEmpty_ReturnsEmptyPage()
     {
         var reader = CreateReader();
@@ -636,6 +819,37 @@ public sealed class LogFileReaderTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadAsync_WhenTheFileLoggerWroteNestedCorrelationScopes_FiltersByTheInnermostId(bool json)
+    {
+        var options = LogFileFixture.Options();
+        options.EnableJsonFormat = json;
+        options.LogDirectory = _fixture.LogDirectory;
+        var provider = new BsftFileLoggerProvider(options, _fixture.Clock);
+        var logger = provider.CreateLogger("Scoped");
+        using (logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = "outer" }))
+        {
+            logger.LogInformation("outer start");
+            using (logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = "inner" }))
+                logger.LogInformation("inner work");
+
+            logger.LogInformation("outer end");
+        }
+
+        logger.LogInformation("outside");
+        provider.Flush();
+        provider.Dispose();
+        var reader = CreateReader();
+
+        var inner = await reader.ReadAsync(new LogReadRequest { CorrelationId = "inner" });
+        var outer = await reader.ReadAsync(new LogReadRequest { CorrelationId = "outer" });
+
+        inner.Entries.Select(entry => entry.Message).Should().Equal("inner work");
+        outer.Entries.Select(entry => entry.Message).Should().Equal("outer end", "outer start");
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1001)]
     public async Task ReadAsync_WhenPageSizeIsOutsideBounds_ThrowsArgumentOutOfRangeException(int pageSize)
@@ -665,6 +879,81 @@ public sealed class LogFileReaderTests : IDisposable
     }
 
     public void Dispose() => _fixture.Dispose();
+
+    private sealed class CountingLogFileAccess : ILogFileAccess
+    {
+        private long _bytesRead;
+        private int _opens;
+
+        public long BytesRead => Interlocked.Read(ref _bytesRead);
+
+        public int Opens => Volatile.Read(ref _opens);
+
+        public bool IsDirectoryPresent(string path) => Directory.Exists(path);
+
+        public IEnumerable<string> EnumerateFiles(string path, string searchPattern)
+            => Directory.EnumerateFiles(path, searchPattern);
+
+        public Stream OpenRead(string path)
+        {
+            Interlocked.Increment(ref _opens);
+            return new CountingStream(
+                new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous),
+                read => Interlocked.Add(ref _bytesRead, read));
+        }
+
+        public async Task WaitForOpensAsync(int count, CancellationToken cancellationToken)
+        {
+            while (Opens < count)
+                await Task.Delay(5, cancellationToken);
+        }
+    }
+
+    private sealed class CountingStream(Stream inner, Action<int> onRead) : Stream
+    {
+        public override bool CanRead => inner.CanRead;
+
+        public override bool CanSeek => inner.CanSeek;
+
+        public override bool CanWrite => false;
+
+        public override long Length => inner.Length;
+
+        public override long Position
+        {
+            get => inner.Position;
+            set => inner.Position = value;
+        }
+
+        public override void Flush() => inner.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = inner.Read(buffer, offset, count);
+            onRead(read);
+            return read;
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var read = await inner.ReadAsync(buffer, cancellationToken);
+            onRead(read);
+            return read;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                inner.Dispose();
+            base.Dispose(disposing);
+        }
+    }
 
     private sealed class ThrowingLogFileAccess(Exception exception) : ILogFileAccess
     {

@@ -256,6 +256,102 @@ decision 3). `Bsft.Core` registers no services, so each package that uses it
 registers it with `TryAddSingleton<IClosureCalculator, ClosureCalculator>()`, and
 the first registration wins.
 
+## Observers
+
+`Bsft.Core.Observers` is the one place a framework or application type keeps an observer from breaking
+the operation it observes. It is plain BCL code, like the poll loop, so it carries no logging
+dependency: the guard hands each contained failure to an `IObserverFailureReporter`.
+
+```csharp
+public sealed class RunObserverComposite(ObserverComposite<IRunObserver> composite) : IRunObserver
+{
+    public void Started(RunInfo run) => composite.Notify(observer => observer.Started(run));
+
+    public Task FinishedAsync(RunInfo run, CancellationToken ct) =>
+        composite.NotifyAsync((observer, token) => observer.FinishedAsync(run, token), ct);
+}
+```
+
+`ObserverComposite<TObserver>` tells every observer in registration order, one after the other, and
+takes a snapshot of the observers when it is built. An observer that throws is contained by the
+`IObserverGuard` it was given, so the observers after it still hear of the event and the observed
+operation carries on. `ObserverGuard` raises `Failures` before it reports, and a reporter that throws
+is contained as well: the failure was counted, and the reporter's own failure is counted in
+`ReporterFailures`, so a host can tell failures that were counted but never reported.
+
+The asynchronous forms contain a fault of the observer, whether it is thrown synchronously or carried by
+the returned task, with one exception: when the token passed in is cancelled, the observed operation is
+being cancelled and that is not an observer failing, so the `OperationCanceledException` propagates and
+nobody is told after it. An observer that cancels on its own, with a token that is not the operation's,
+is an ordinary failure. `NotifyAsync` checks the token before it tells each observer, so an observer
+that ignores its token cannot let the next one be told after the operation was cancelled.
+
+A contract that wants to be called as one observer implements itself by delegation, as above. Do not
+register that class as one of the observers it injects, or it would be told about its own events.
+
+`Bsft.Hosting` registers the parts: `services.AddBsftObservers()` adds the guard, a reporter that logs
+each failure at warning level (the observer type and the exception type; the exception itself only with
+`ObserverFailureLoggingOptions.IncludeExceptionDetails`, because its message may hold data of the observed
+operation), and the open generic composite;
+`services.AddBsftObserver<IRunObserver, AuditRunObserver>()` adds one observer. Everything is a
+`TryAdd`, so a host that registered its own `IObserverFailureReporter` or `IObserverGuard` first keeps it.
+Observers are singletons, because the composite that holds them is one: `AddBsftObserver` throws when the
+contract is already registered as scoped or transient, instead of leaving the composite to capture a
+scoped service.
+
+## Keyed gate and slot pool
+
+`Bsft.Core.Concurrency` has two small async primitives with a documented order, for work that must not
+overlap on one resource and must not run more than so many at once.
+
+`KeyedGate<TKey>` (`IKeyedGate<TKey>`) lets callers asking for the same key run one at a time and does
+not make callers of different keys wait for each other. `EnterAsync(key, ct)` returns a handle; disposing
+it lets the next waiter for that key in.
+
+```csharp
+var directories = new KeyedGate<string>(
+    OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
+
+using (await directories.EnterAsync(Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)), ct))
+{
+    // one build or restore of this directory at a time
+}
+```
+
+- **Keys.** The comparer decides which keys are the same (default: the default comparer of `TKey`). The
+  key reaches it as it is, so a caller that compares paths normalises them first, as above.
+- **No leaked entries.** An entry exists only while some caller holds or waits for the key. It is removed
+  when the last user leaves, released or cancelled, so a gate that served any number of distinct keys is
+  empty again afterwards; `TrackedKeys` reads zero when idle.
+- **Order.** Waiters of one key are admitted strictly in the order they asked.
+
+`SlotPool` (`ISlotPool`) is a fixed number of slots. `EnterAsync(ct)` waits for a free one;
+`Capacity` and `Available` report the numbers.
+
+- **Fairness.** Callers are admitted strictly in the order they called, and a caller arriving while
+  others wait queues behind them even when a slot has just been freed. The pool keeps its own queue
+  rather than using `SemaphoreSlim`, which documents no order, and the gate uses one pool of a single slot per key.
+- **Cancellation.** A token that is already cancelled yields a cancelled task before anything is taken, even when a slot is
+  free. A caller cancelled while it waits leaves the queue and holds nothing. A token cancelled after the
+  slot was granted does not revoke the grant: the call returns the slot and the caller disposes it.
+- **Release.** Disposing a handle releases once. A second dispose does nothing, so a handle disposed on two
+  code paths cannot free what another caller now holds.
+
+The two compose. Take the key's gate before a slot of the pool, so a caller queued behind another one of
+the same key never holds a slot it cannot use. Nested `using` statements give the gate back when the wait
+for the slot is cancelled, because the gate's `using` is already open:
+
+```csharp
+using (await directories.EnterAsync(key, ct))
+using (await pool.EnterAsync(ct))
+{
+    // run; the slot is disposed first, then the gate, also when the wait for the slot is cancelled
+}
+```
+
+Two pools that share one `KeyedGate` never run two callers of the same key at once, whichever pool
+admitted them.
+
 ## Setup
 
 There is nothing to register. Reference the package and throw the exceptions:

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Bsft.Correlation;
 using Microsoft.Extensions.Logging;
 
 namespace Bsft.Logging;
@@ -54,6 +55,21 @@ public sealed class BsftLoggingOptions
     public bool EnableJsonFormat { get; set; }
 
     /// <summary>
+    /// Gets or sets the scope keys the file logger persists on every line, in the order they are written. The
+    /// innermost value of each key active when the line is logged is stored. The default is
+    /// <see cref="LogScopeKeys.CorrelationId"/> alone, which is written to the line's dedicated correlation slot;
+    /// every other key is written as a scope property map. Defaults to the correlation id only.
+    /// </summary>
+    public IList<string> PersistedScopeKeys { get; set; } = new List<string> { LogScopeKeys.CorrelationId };
+
+    /// <summary>
+    /// Gets or sets how many characters of keys and values the scope property map of one line may hold in total,
+    /// the correlation id excepted. Beyond it the last value is cut and the remaining properties are left out.
+    /// Defaults to 1024.
+    /// </summary>
+    public int MaxScopePropertyChars { get; set; } = 1024;
+
+    /// <summary>
     /// Minimum log level for the file logger. Default: <see cref="LogLevel.Information"/>.
     /// </summary>
     /// <remarks>
@@ -102,6 +118,12 @@ public sealed class BsftLoggingOptions
                 FormattableString.Invariant($"must be between 1 and {MaxFileSizeLimitMb}"),
                 MaxFileSizeMb);
         }
+
+        if (ScopePropertyEncoding.TryFindKeyProblem(PersistedScopeKeys, out var problem, out var problemValue))
+            throw Invalid(nameof(PersistedScopeKeys), problem, problemValue);
+
+        if (MaxScopePropertyChars <= 0)
+            throw Invalid(nameof(MaxScopePropertyChars), "must be positive", MaxScopePropertyChars);
 
         if (RetainDays is < 1 or > MaxRetainDaysLimit)
         {

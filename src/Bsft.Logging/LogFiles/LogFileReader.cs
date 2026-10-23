@@ -78,28 +78,30 @@ public sealed class LogFileReader : ILogFileReader
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
-        var initialQuery = query with { Before = null };
+        // The scan follows the position only: a filter that rarely matches must not make every poll read back
+        // through the history, so entries are scanned unfiltered down to the cursor and filtered when collected.
+        var positionQuery = new LogReadRequest(query.PageSize);
         var lastSequence = query.Before
-            ?? await NewestSequenceOrZeroAsync(initialQuery, cancellationToken).ConfigureAwait(false);
+            ?? await NewestSequenceOrZeroAsync(positionQuery, cancellationToken).ConfigureAwait(false);
 
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var burst = new List<LogFileEntry>();
-            await foreach (var entry in EnumerateNewestAsync(initialQuery, cancellationToken).ConfigureAwait(false))
+            var newestScanned = lastSequence;
+            await foreach (var entry in EnumerateNewestAsync(positionQuery, cancellationToken).ConfigureAwait(false))
             {
                 if (entry.Sequence <= lastSequence)
                     break;
 
-                burst.Add(entry);
+                newestScanned = Math.Max(newestScanned, entry.Sequence);
+                if (LogReadFilter.IsMatch(entry, query))
+                    burst.Add(entry);
             }
 
+            lastSequence = newestScanned;
             for (var index = burst.Count - 1; index >= 0; index--)
-            {
-                var entry = burst[index];
-                lastSequence = entry.Sequence;
-                yield return entry;
-            }
+                yield return burst[index];
 
             await Task.Delay(_pollInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
         }
@@ -127,7 +129,7 @@ public sealed class LogFileReader : ILogFileReader
             {
                 var entry = entries.Current;
                 if ((query.Before is null || entry.Sequence < query.Before.Value)
-                    && IsMatch(entry, query))
+                    && LogReadFilter.IsMatch(entry, query))
                 {
                     yield return entry;
                 }
@@ -171,25 +173,6 @@ public sealed class LogFileReader : ILogFileReader
             return false;
         }
     }
-
-    private static bool IsMatch(LogFileEntry entry, LogReadRequest query)
-    {
-        if (query.MinimumLevel is { } minimum && entry.Level < minimum)
-            return false;
-
-        if (query.IncludedLevels is { } included && !included.Contains(entry.Level))
-            return false;
-
-        if (string.IsNullOrWhiteSpace(query.SearchText))
-            return true;
-
-        return Contains(entry.Category, query.SearchText)
-            || Contains(entry.Message, query.SearchText)
-            || Contains(entry.Exception, query.SearchText);
-    }
-
-    private static bool Contains(string? value, string searchText)
-        => value?.Contains(searchText, StringComparison.OrdinalIgnoreCase) == true;
 
     private async IAsyncEnumerable<LogFileEntry> ReadFileNewestAsync(
         LogFileDescriptor file,

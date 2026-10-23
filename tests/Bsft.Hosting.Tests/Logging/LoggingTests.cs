@@ -54,6 +54,53 @@ public class LoggingTests
     }
 
     [Fact]
+    public void AddBsftHostLogging_CopiesThePersistedScopeKeysOfTheFileLoggerToTheConsole()
+    {
+        var services = new ServiceCollection();
+        services.AddBsftHostLogging(options => options.FileLogging(file =>
+        {
+            file.EnableFileLogging = false;
+            file.PersistedScopeKeys.Add("RunId");
+        }));
+
+        var provider = services.BuildServiceProvider();
+        var console = provider.GetRequiredService<IOptionsMonitor<BsftConsoleFormatterOptions>>().CurrentValue;
+
+        console.PersistedScopeKeys.Should().Equal("CorrelationId", "RunId");
+    }
+
+    [Theory]
+    [MemberData(nameof(UnusableKeyLists))]
+    public void AddBsftHostLogging_WhenTheConsoleKeysAreUnusable_FailsWhenTheOptionsAreRead(string[]? keys)
+    {
+        var services = new ServiceCollection();
+        services.AddBsftHostLogging(options => options.FileLogging(file => file.EnableFileLogging = false));
+        services.Configure<BsftConsoleFormatterOptions>(console => console.PersistedScopeKeys = keys!);
+
+        var provider = services.BuildServiceProvider();
+        var read = () => provider.GetRequiredService<IOptionsMonitor<BsftConsoleFormatterOptions>>().CurrentValue;
+
+        read.Should().Throw<OptionsValidationException>().WithMessage("*PersistedScopeKeys*");
+    }
+
+    [Fact]
+    public void ConsoleOptionsValidator_WithUsableKeys_Succeeds()
+    {
+        var validator = new BsftConsoleFormatterOptionsValidator(new Bsft.Logging.Sinks.ScopeLineEncoder());
+
+        validator.Validate(null, new BsftConsoleFormatterOptions()).Succeeded.Should().BeTrue();
+        var act = () => validator.Validate(null, null!);
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    public static TheoryData<string[]?> UnusableKeyLists() => new()
+    {
+        null,
+        new[] { "RunId", " " },
+        new[] { "~truncated" },
+    };
+
+    [Fact]
     public void AddBsftHostLogging_JsonFormat_UsesJsonFormatter()
     {
         var services = new ServiceCollection();

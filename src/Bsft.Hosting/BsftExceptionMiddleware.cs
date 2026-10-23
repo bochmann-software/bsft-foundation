@@ -1,6 +1,8 @@
 using Bsft.Core;
 using Bsft.Correlation;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
@@ -62,7 +64,7 @@ public sealed class BsftExceptionMiddleware
     }
 
     /// <summary>
-    /// Maps one exception to a response, logs it, and writes it.
+    /// Maps one exception to a response, logs it, and writes it, unless the response is already on the wire.
     /// </summary>
     /// <param name="context">The request that failed.</param>
     /// <param name="exception">What it failed with.</param>
@@ -74,21 +76,6 @@ public sealed class BsftExceptionMiddleware
 
         LogException(exception, statusCode, correlationId);
 
-        await WriteProblemResponseAsync(context, statusCode, title, detail, extensions).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Writes the ProblemDetails document, unless the response is already on the wire.
-    /// </summary>
-    /// <param name="context">The request being answered.</param>
-    /// <param name="statusCode">The status to answer with.</param>
-    /// <param name="title">The short, reusable name of the problem.</param>
-    /// <param name="detail">What went wrong with this particular request.</param>
-    /// <param name="extensions">The members carried beside the RFC 9457 ones.</param>
-    /// <returns>A task that completes when the response is written.</returns>
-    private async Task WriteProblemResponseAsync(
-        HttpContext context, int statusCode, string title, string detail, Dictionary<string, object> extensions)
-    {
         if (context.Response.HasStarted)
         {
             // Headers/body are already on the wire; setting the status now would throw. Log and bail.
@@ -97,21 +84,70 @@ public sealed class BsftExceptionMiddleware
             return;
         }
 
-        var problemDetails = new Dictionary<string, object?>
+        context.Response.StatusCode = statusCode;
+
+        var problemDetails = new ProblemDetails
         {
-            ["type"] = $"https://httpstatuses.io/{statusCode}",
-            ["title"] = title,
-            ["status"] = statusCode,
-            ["detail"] = detail
+            Type = $"https://httpstatuses.io/{statusCode}",
+            Title = title,
+            Status = statusCode,
+            Detail = detail
         };
 
         foreach (var ext in extensions)
-            problemDetails[ext.Key] = ext.Value;
+            problemDetails.Extensions[ext.Key] = ext.Value;
 
-        context.Response.StatusCode = statusCode;
+        await WriteProblemDocumentAsync(context, exception, problemDetails).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes the ProblemDetails document of a response whose status is already set.
+    /// </summary>
+    /// <param name="context">The request being answered.</param>
+    /// <param name="exception">The exception that was mapped, carried through so a host's
+    /// <c>CustomizeProblemDetails</c> or a custom <see cref="IProblemDetailsWriter"/> can read it.</param>
+    /// <param name="problemDetails">The document the exception mapped to.</param>
+    /// <returns>A task that completes when the response is written.</returns>
+    /// <remarks>
+    /// When the host registered <see cref="IProblemDetailsService"/> (<c>AddProblemDetails</c>), the
+    /// document is written through it, so <c>CustomizeProblemDetails</c> and a custom
+    /// <see cref="IProblemDetailsWriter"/> apply to exception-mapped bodies the same way they apply to
+    /// every other ProblemDetails response. A host without the service registered, or whose registered
+    /// writers all decline the request (for example an <c>Accept</c> header none of them supports), gets
+    /// the same direct write this middleware has always done; that fallback is also what keeps the
+    /// default body shape byte-identical when nothing customises it.
+    /// </remarks>
+    private static async Task WriteProblemDocumentAsync(
+        HttpContext context, Exception exception, ProblemDetails problemDetails)
+    {
+        var problemDetailsService = context.RequestServices?.GetService<IProblemDetailsService>();
+        if (problemDetailsService is not null)
+        {
+            var written = await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
+            {
+                HttpContext = context,
+                ProblemDetails = problemDetails,
+                Exception = exception
+            }).ConfigureAwait(false);
+
+            if (written)
+                return;
+        }
+
+        var fallbackDocument = new Dictionary<string, object?>
+        {
+            ["type"] = problemDetails.Type,
+            ["title"] = problemDetails.Title,
+            ["status"] = problemDetails.Status,
+            ["detail"] = problemDetails.Detail
+        };
+
+        foreach (var ext in problemDetails.Extensions)
+            fallbackDocument[ext.Key] = ext.Value;
+
         context.Response.ContentType = "application/problem+json";
 
-        var json = JsonSerializer.Serialize(problemDetails, JsonOptions);
+        var json = JsonSerializer.Serialize(fallbackDocument, JsonOptions);
         await context.Response.WriteAsync(json).ConfigureAwait(false);
     }
 

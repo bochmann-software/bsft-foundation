@@ -13,4 +13,20 @@ public sealed record LogReadRequest(
     long? Before = null,
     LogLevel? MinimumLevel = null,
     IReadOnlySet<LogLevel>? IncludedLevels = null,
-    string? SearchText = null);
+    string? SearchText = null)
+{
+    /// <summary>
+    /// Gets an optional exact, case-sensitive correlation id. An entry matches when its
+    /// <see cref="LogFileEntry.CorrelationId"/>, the innermost <c>CorrelationId</c> scope active when it was
+    /// logged, equals this value. Null, empty or whitespace applies no correlation filter, and an entry logged
+    /// outside any scope has no id, so no value selects it.
+    /// </summary>
+    public string? CorrelationId { get; init; }
+
+    /// <summary>
+    /// Gets an optional exact, case-sensitive scope filter: every pair must equal the entry's
+    /// <see cref="LogFileEntry.ScopeProperties"/> value for that key (AND semantics). A null or empty filter
+    /// applies none. <see cref="CorrelationId"/> is matched the same way, as the <c>CorrelationId</c> pair.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? ScopeFilter { get; init; }
+}

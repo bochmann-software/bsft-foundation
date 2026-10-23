@@ -9,6 +9,9 @@
          raises are written by one SaveChanges. The outbox package itself stays independent of the
          saga engine. -->
     <ProjectReference Include="..\..\src\Bsft.EventAggregator.Saga.EFCore\Bsft.EventAggregator.Saga.EFCore.csproj" />
+    <!-- Not referenced by the package under test; only tests/Shared/RelationalModelWarmup.cs needs it,
+         to reuse Bsft.Data's runtime-model warm-up instead of rebuilding it. -->
+    <ProjectReference Include="..\..\src\Bsft.Data\Bsft.Data.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -27,8 +27,8 @@ jobs:
       contents: read
       id-token: write   # the OIDC token NuGet/login exchanges; nothing else in the job needs it
     steps:
-    - uses: actions/checkout@v5
-    - uses: actions/setup-dotnet@v5
+    - uses: actions/checkout@v7
+    - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: |
           8.0.x

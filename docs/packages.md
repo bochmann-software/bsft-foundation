@@ -28,7 +28,8 @@ no assembly, so there is no entry point for a host to call.
 | `Bsft.EventAggregator.Saga.EFCore` | [saga.md](saga.md) | `AddBsftSagaEFCore<TContext>` |
 | `Bsft.EventAggregator.Saga` | [saga.md](saga.md) | `AddBsftSaga` |
 | `Bsft.EventAggregator` | [event-aggregator.md](event-aggregator.md) | `AddBsftEventAggregator` |
-| `Bsft.Hosting` | [hosting.md](hosting.md) | `HostingServiceCollectionExtensions.AddBsftDefaults` |
+| `Bsft.Hosting` | [hosting.md](hosting.md) | `HostingServiceCollectionExtensions.AddBsftDefaults`, `ObserverServiceCollectionExtensions.AddBsftObservers` |
+| `Bsft.Hosting.BackgroundWork` | [hosting.md](hosting.md#background-work) | `BackgroundWorkServiceCollectionExtensions.AddBsftBackgroundWorkRunOnce`, `PipelineServiceCollectionExtensions.AddBsftBatchingWriter` |
 | `Bsft.Http.Egress` | [http-egress.md](http-egress.md) | `HttpEgressServiceCollectionExtensions.AddBsftHttpEgress` |
 | `Bsft.Http` | [http.md](http.md) | — (static helpers only) |
 | `Bsft.Idempotency.EFCore` | [idempotency.md](idempotency.md) | `AddBsftIdempotencyEFCore<TContext>` |

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Runtime.CompilerServices;
+using Bsft.Correlation;
+using Bsft.Logging.Sinks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Console;
@@ -30,7 +31,9 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
 
     private readonly IDisposable? _optionsReloadToken;
     private readonly TimeProvider _timeProvider;
+    private readonly IScopeLineEncoder _encoder;
     private BsftConsoleFormatterOptions _options;
+    private string[] _scopeKeys;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BsftConsoleFormatter"/> class.
@@ -39,12 +42,34 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
     /// <param name="timeProvider">The time provider used for timestamps.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
     public BsftConsoleFormatter(IOptionsMonitor<BsftConsoleFormatterOptions> options, TimeProvider? timeProvider = null)
+        : this(options, new ScopeLineEncoder(), timeProvider)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BsftConsoleFormatter"/> class with the encoder that writes the scope parts of the line.
+    /// </summary>
+    /// <param name="options">The monitor providing formatter options.</param>
+    /// <param name="encoder">The encoder of the correlation slot and the scope property block, shared with the file logger's format.</param>
+    /// <param name="timeProvider">The time provider used for timestamps.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> or <paramref name="encoder"/> is <see langword="null"/>.</exception>
+    public BsftConsoleFormatter(
+        IOptionsMonitor<BsftConsoleFormatterOptions> options,
+        IScopeLineEncoder encoder,
+        TimeProvider? timeProvider = null)
         : base(HostingDefaults.ConsoleFormatterName)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(encoder);
 
+        _encoder = encoder;
         _options = options.CurrentValue;
-        _optionsReloadToken = options.OnChange(updated => _options = updated);
+        _scopeKeys = DistinctKeys(_options);
+        _optionsReloadToken = options.OnChange(updated =>
+        {
+            _options = updated;
+            _scopeKeys = DistinctKeys(updated);
+        });
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -60,7 +85,7 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
             .ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
 
         var levelAbbreviation = GetLogLevelAbbreviation(logEntry.LogLevel);
-        var correlationId = GetCorrelationId(scopeProvider);
+        var scopes = ReadScopes(scopeProvider, _scopeKeys);
         var categoryShort = GetShortCategory(logEntry.Category);
 
         textWriter.Write('[');
@@ -68,8 +93,10 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
         textWriter.Write(' ');
         textWriter.Write(levelAbbreviation);
         textWriter.Write("] [");
-        textWriter.Write(correlationId);
-        textWriter.Write("] ");
+        textWriter.Write(_encoder.EscapeSlot(scopes.CorrelationId));
+        textWriter.Write(']');
+        textWriter.Write(_encoder.ToBlock(scopes.Properties));
+        textWriter.Write(' ');
         textWriter.Write(categoryShort);
         textWriter.Write(": ");
         textWriter.WriteLine(message);
@@ -101,68 +128,34 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
     };
 
     /// <summary>
-    /// Finds the correlation id among the scopes in force.
+    /// Reads the persisted scope values among the scopes in force, the same keys and the same encoding the file logger writes.
     /// </summary>
     /// <param name="scopeProvider">The scopes, or <see langword="null"/> when none are captured.</param>
-    /// <returns>The correlation id, or <c>-</c> when no scope carries one.</returns>
+    /// <param name="persistedKeys">The keys to read, the correlation id among them or not.</param>
+    /// <returns>The correlation id (<c>-</c> when no scope carries one) and the other values found, in key order.</returns>
     /// <remarks>
-    /// The innermost scope carrying one wins: <c>ForEachScope</c> walks outermost first, and each
-    /// match overwrites the last.
+    /// The innermost scope carrying a key wins: <c>ForEachScope</c> walks outermost first, and each match
+    /// overwrites the last. Unlike the file, the console applies no size budget, since nothing reads it back.
     /// </remarks>
-    private static string GetCorrelationId(IExternalScopeProvider? scopeProvider)
+    private static ScopeReading ReadScopes(IExternalScopeProvider? scopeProvider, string[] persistedKeys)
     {
-        if (scopeProvider is null)
-            return "-";
-
-        var box = new StrongBox<string>("-");
-        scopeProvider.ForEachScope(static (scope, state) =>
-        {
-            var found = TryExtractCorrelationId(scope, out var value);
-            if (found)
-                state.Value = value ?? "-";
-        }, box);
-
-        // The box starts at "-" and is only ever assigned a non-null value; the coalesce is what the
-        // BCL's nullable Value field asks for rather than a case that can arise.
-        return box.Value ?? "-";
+        var reading = new ScopeReading(persistedKeys);
+        scopeProvider?.ForEachScope(static (scope, state) => state.Read(scope), reading);
+        reading.Complete();
+        return reading;
     }
 
     /// <summary>
-    /// Reads the correlation id out of one scope.
+    /// Lists the persisted keys once per options instance: distinct, in configured order, cut to one line like the
+    /// file logger's keys. A missing list reads as the correlation id alone.
     /// </summary>
-    /// <param name="scope">The scope object, whatever the caller passed to <c>BeginScope</c>.</param>
-    /// <param name="value">The id it carries, when it carries one.</param>
-    /// <returns><see langword="true"/> when the scope named a correlation id.</returns>
-    /// <remarks>
-    /// The list case is checked first and indexed rather than enumerated, because the scope the
-    /// correlation middleware opens is a list and this runs for every scope of every log line.
-    /// </remarks>
-    private static bool TryExtractCorrelationId(object? scope, out string? value)
-    {
-        value = null;
-        if (scope is IReadOnlyList<KeyValuePair<string, object>> kvpList)
-        {
-            for (var i = 0; i < kvpList.Count; i++)
-            {
-                if (!string.Equals(kvpList[i].Key, "CorrelationId", StringComparison.Ordinal))
-                    continue;
-                value = kvpList[i].Value?.ToString();
-                return true;
-            }
-        }
-        else if (scope is IEnumerable<KeyValuePair<string, object>> kvpEnumerable)
-        {
-            foreach (var kvp in kvpEnumerable)
-            {
-                if (!string.Equals(kvp.Key, "CorrelationId", StringComparison.Ordinal))
-                    continue;
-                value = kvp.Value?.ToString();
-                return true;
-            }
-        }
-
-        return false;
-    }
+    /// <param name="options">The formatter options.</param>
+    /// <returns>The keys.</returns>
+    private static string[] DistinctKeys(BsftConsoleFormatterOptions options)
+        => (options.PersistedScopeKeys ?? [LogScopeKeys.CorrelationId])
+            .Select(key => key.ReplaceLineEndings(" "))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>
     /// Shortens a category to its last segment, which is the type name.
@@ -179,5 +172,73 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
             var lastDot = full.LastIndexOf('.');
             return lastDot >= 0 ? full[(lastDot + 1)..] : full;
         });
+    }
+
+    /// <summary>The persisted values of the scopes of one line, collected while the scopes are walked.</summary>
+    private sealed class ScopeReading
+    {
+        private readonly string[] _keys;
+        private readonly string?[] _values;
+
+        private List<KeyValuePair<string, string>>? _properties;
+
+        public ScopeReading(string[] keys)
+        {
+            _keys = keys;
+            _values = new string?[keys.Length];
+        }
+
+        public string CorrelationId { get; private set; } = "-";
+
+        public IReadOnlyList<KeyValuePair<string, string>> Properties
+            => _properties ?? (IReadOnlyList<KeyValuePair<string, string>>)Array.Empty<KeyValuePair<string, string>>();
+
+        /// <summary>Takes the persisted values of one scope, which is whatever the caller passed to <c>BeginScope</c>.</summary>
+        /// <param name="scope">The scope object.</param>
+        /// <remarks>
+        /// The list case is checked first and indexed rather than enumerated, because the scope the correlation
+        /// middleware opens is a list and this runs for every scope of every log line.
+        /// </remarks>
+        public void Read(object? scope)
+        {
+            if (scope is IReadOnlyList<KeyValuePair<string, object>> list)
+            {
+                for (var index = 0; index < list.Count; index++)
+                    Take(list[index]);
+            }
+            else if (scope is IEnumerable<KeyValuePair<string, object>> pairs)
+            {
+                foreach (var pair in pairs)
+                    Take(pair);
+            }
+        }
+
+        /// <summary>Splits what was read into the correlation id and the other properties.</summary>
+        public void Complete()
+        {
+            for (var index = 0; index < _keys.Length; index++)
+            {
+                if (_values[index] is not { } value)
+                    continue;
+
+                if (string.Equals(_keys[index], LogScopeKeys.CorrelationId, StringComparison.Ordinal))
+                    CorrelationId = value;
+                else
+                    (_properties ??= []).Add(new KeyValuePair<string, string>(_keys[index], value.ReplaceLineEndings(" ")));
+            }
+        }
+
+        private void Take(KeyValuePair<string, object> pair)
+        {
+            for (var index = 0; index < _keys.Length; index++)
+            {
+                if (!string.Equals(pair.Key, _keys[index], StringComparison.Ordinal))
+                    continue;
+
+                var value = pair.Value?.ToString();
+                _values[index] = value ?? (string.Equals(pair.Key, LogScopeKeys.CorrelationId, StringComparison.Ordinal) ? "-" : string.Empty);
+                return;
+            }
+        }
     }
 }

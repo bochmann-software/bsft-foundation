@@ -26,7 +26,9 @@ public class PostgresSearchProviderTests : IDisposable
         // An inlined literal would give every distinct search term its own statement text and its
         // own query plan — ruinous for a search-as-you-type endpoint.
         var statement = sql[sql.IndexOf("SELECT", StringComparison.Ordinal)..];
-        statement.Should().Contain("@__");
+        // A parameter placeholder; EF Core 9 names it after the closure field (@__value_0), EF Core 10
+        // after the captured member (@Value), so the name itself is not part of the contract.
+        statement.Should().MatchRegex("@[A-Za-z_][A-Za-z0-9_]*");
         statement.Should().NotContain("müller");
     }
 

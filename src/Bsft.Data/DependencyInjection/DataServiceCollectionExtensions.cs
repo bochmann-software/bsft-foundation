@@ -1,11 +1,13 @@
 using Bsft.Core.Persistence;
 using Bsft.Data.Search;
 using Bsft.Data.Filtering;
+using Bsft.Data.Modeling;
 using Bsft.Data.MultiTenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Bsft.Data.Diagnostics;
 using Bsft.Instrumentation.DependencyInjection;
@@ -50,6 +52,7 @@ public static class DataServiceCollectionExtensions
         // "Bsft.Data" source is advertised for discovery via the vendor-neutral instrumentation layer.
         services.AddBsftInstrumentationSource(DataTelemetry.SourceName);
         services.TryAddSingleton<IDataTelemetry, DataTelemetry>();
+        services.AddBsftDataModelWarmup();
         services.TryAddEnumerable(ServiceDescriptor.Transient<Bsft.Core.IStartupValidator, SearchStartupValidator>());
         services.TryAddEnumerable(ServiceDescriptor.Transient<Bsft.Core.IStartupValidator, QueryConfigurationStartupValidator>());
 
@@ -92,10 +95,44 @@ public static class DataServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddBsftDataModelWarmup();
         services.TryAddScoped<DbContextUnitOfWork<TContext>>();
         services.TryAddScoped<IUnitOfWork>(sp => sp.GetRequiredService<DbContextUnitOfWork<TContext>>());
         services.TryAddScoped<ITransactionalUnitOfWork>(
             sp => sp.GetRequiredService<DbContextUnitOfWork<TContext>>());
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the hosted service that builds the relational model of each relational context type
+    /// as its first instance initializes, before the host starts serving.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// EF Core builds a model's relational model lazily, and two contexts of a new model that run
+    /// their first command at the same moment can fail with "The model must be finalized and its
+    /// runtime dependencies must be initialized before 'GetRelationalModel' can be used". The service
+    /// builds it as each context initializes, one at a time, which is before any of them can run a
+    /// command. It covers every context in the process however it is registered, and contexts on a
+    /// non-relational provider are left alone.
+    /// </para>
+    /// <para>
+    /// <see cref="AddBsftDataQueryFiltering"/>, <see cref="AddBsftDataUnitOfWork{TContext}"/> and
+    /// both <c>AddBsftDataMultiTenancy</c> overloads call this; a host that uses EF Core without any
+    /// of them calls it itself. Calling it again adds nothing. To keep EF Core's lazy build, set
+    /// <see cref="BsftDataOptions.ShouldWarmRelationalModels"/> to <see langword="false"/>.
+    /// </para>
+    /// </remarks>
+    public static IServiceCollection AddBsftDataModelWarmup(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<BsftDataOptions>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RelationalModelWarmupHostedService>());
 
         return services;
     }
@@ -177,6 +214,7 @@ public static class DataServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<BsftDataOptions>, BsftDataOptionsValidator>());
 
+        services.AddBsftDataModelWarmup();
         services.AddScoped<TenantContext>();
         services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantContext>());
         services.AddScoped<TenantSaveChangesInterceptor>();

@@ -1,14 +1,14 @@
 <Project>
 
   <!--
-    BsftOnlyTargetFramework (Directory.Build.props) narrows the Foundation projects to one of their
-    frameworks. A value no project targets would narrow nothing and leave a gate that means to measure
+    BsftOnlyTargetFramework (Directory.Build.props) narrows the packages and their test projects to
+    one of their frameworks. A value no project targets would narrow nothing and leave a gate that means to measure
     one framework measuring all of them, so it fails the build instead.
   -->
   <Target Name="BsftCheckOnlyTargetFramework"
           BeforeTargets="DispatchToInnerBuilds;_CheckForInvalidConfigurationAndPlatform"
-          Condition="'$(BsftOnlyTargetFramework)' != '' And !$([System.String]::Copy(';$(BsftFrameworkTargetFramework);$(BsftFoundationTargetFrameworks);').Contains(';$(BsftOnlyTargetFramework);'))">
-    <Error Text="BsftOnlyTargetFramework is '$(BsftOnlyTargetFramework)', which no project targets; the frameworks are $(BsftFoundationTargetFrameworks)." />
+          Condition="'$(BsftOnlyTargetFramework)' != '' And !$([System.String]::Copy(';$(BsftReferenceTargetFramework);$(BsftFoundationTargetFrameworks);$(BsftFrameworkTargetFrameworks);').Contains(';$(BsftOnlyTargetFramework);'))">
+    <Error Text="BsftOnlyTargetFramework is '$(BsftOnlyTargetFramework)', which no project targets; the frameworks are $(BsftReferenceTargetFramework);$(BsftFoundationTargetFrameworks);$(BsftFrameworkTargetFrameworks)." />
   </Target>
 
   <!--
@@ -54,6 +54,25 @@
                       Lines="$(BsftRunSettingsContent)"
                       Overwrite="true"
                       WriteOnlyWhenDifferent="true" />
+  </Target>
+
+  <!--
+    EF Core builds a model's relational view lazily, and two contexts asking for it at the same moment
+    can make one of them throw "The model must be finalized". Parallel test classes sharing a context
+    type do exactly that, so every test project that references EF Core's relational layer compiles
+    tests/Shared/RelationalModelWarmup.cs, which builds the views as each context initializes. Decided
+    from the resolved references, because most test projects get the relational layer transitively
+    through the package they test.
+  -->
+  <Target Name="BsftCompileRelationalModelWarmup"
+          Condition="$(MSBuildProjectName.EndsWith('$(BsftTestProjectSuffix)'))"
+          AfterTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <_BsftRelationalReference Include="@(ReferencePath)" Condition="'%(Filename)' == 'Microsoft.EntityFrameworkCore.Relational'" />
+      <Compile Include="$(MSBuildThisFileDirectory)tests\Shared\RelationalModelWarmup.cs"
+               Link="Shared\RelationalModelWarmup.cs"
+               Condition="'@(_BsftRelationalReference)' != ''" />
+    </ItemGroup>
   </Target>
 
 </Project>

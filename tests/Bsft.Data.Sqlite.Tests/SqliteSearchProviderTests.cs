@@ -29,7 +29,9 @@ public class SqliteSearchProviderTests : IDisposable
         // parameter value in a leading .param set line, so the statement itself is what has to be
         // checked.
         var statement = sql[sql.IndexOf("SELECT", StringComparison.Ordinal)..];
-        statement.Should().Contain("@__");
+        // A parameter placeholder; EF Core 9 names it after the closure field (@__value_0), EF Core 10
+        // after the captured member (@Value), so the name itself is not part of the contract.
+        statement.Should().MatchRegex("@[A-Za-z_][A-Za-z0-9_]*");
         statement.Should().NotContain("müller");
     }
 

@@ -60,6 +60,7 @@ Licensed under the [MIT License](LICENSE). Packages are published on
 | Cross-cutting | [`Bsft.Localization`](docs/localization.md) | Database-backed localization with tenant support. |
 | Cross-cutting | [`Bsft.Localization.EFCore`](docs/localization.md) | EF Core persistence for translations and their seed. |
 | Hosting | [`Bsft.Hosting`](docs/hosting.md) | ASP.NET Core host defaults: OpenAPI, versioning, CORS, rate limiting, health checks, ProblemDetails. |
+| Hosting | [`Bsft.Hosting.BackgroundWork`](docs/hosting.md#background-work) | Run-once startup operations and bounded batching pipelines for a generic host, without the web stack. |
 | Hosting | [`Bsft.Modules`](docs/modules.md) | Composes an application from independently versioned modules. |
 | Hosting | [`Bsft.Http`](docs/http.md) | HTTP primitives: entity tags, conditional GET and conditional writes. |
 | Hosting | [`Bsft.Http.Egress`](docs/http-egress.md) | An outbound egress guard against server-side request forgery, with its `HttpClient` wiring. |

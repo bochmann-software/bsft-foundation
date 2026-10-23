@@ -22,11 +22,20 @@ namespace Bsft.Messaging.RabbitMQ.Tests;
 /// </summary>
 public class RabbitMQSeamBindingTests : IAsyncLifetime
 {
-    private readonly FakeRabbitMQConnectionFactory _connectionFactory = new();
-    private readonly FakeRabbitMQConnection _connection = new();
-    private readonly FakeRabbitMQChannel _consumeChannel = new();
-    private readonly FakeRabbitMQChannel _publishChannel = new();
+    private readonly ChangeSignal _signal = new();
+    private readonly FakeRabbitMQConnectionFactory _connectionFactory;
+    private readonly FakeRabbitMQConnection _connection;
+    private readonly FakeRabbitMQChannel _consumeChannel;
+    private readonly FakeRabbitMQChannel _publishChannel;
     private readonly SeamHandlerLog _log = new();
+
+    public RabbitMQSeamBindingTests()
+    {
+        _connectionFactory = new FakeRabbitMQConnectionFactory(_signal);
+        _connection = new FakeRabbitMQConnection(_signal);
+        _consumeChannel = new FakeRabbitMQChannel(_signal);
+        _publishChannel = new FakeRabbitMQChannel(_signal);
+    }
 
     private ServiceProvider _provider = null!;
     private IHostedService _consumerHost = null!;
@@ -67,7 +76,7 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
         _consumerHost = _provider.GetServices<IHostedService>().OfType<IntegrationEventConsumerHost>().Single();
 
         await _consumerHost.StartAsync(CancellationToken.None);
-        await Eventually.HoldsAsync(() => _consumeChannel.DeliveryCallback is not null);
+        await Eventually.HoldsAsync(() => _consumeChannel.DeliveryCallback is not null, _signal);
     }
 
     public async Task DisposeAsync()
@@ -81,7 +90,7 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
     {
         await _consumeChannel.DeliverAsync(Delivery(1, "A-1"));
 
-        await Eventually.HoldsAsync(() => _consumeChannel.Acked.Count == 1);
+        await Eventually.HoldsAsync(() => _consumeChannel.Acked.Count == 1, _signal);
         _log.Handled.Should().Equal("A-1");
         _consumeChannel.Nacked.Should().BeEmpty();
     }
@@ -91,11 +100,11 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
     {
         var eventId = Guid.NewGuid();
         await _consumeChannel.DeliverAsync(Delivery(1, "A-1", eventId));
-        await Eventually.HoldsAsync(() => _consumeChannel.Acked.Count == 1);
+        await Eventually.HoldsAsync(() => _consumeChannel.Acked.Count == 1, _signal);
 
         await _consumeChannel.DeliverAsync(Delivery(2, "A-1", eventId));
 
-        await Eventually.HoldsAsync(() => _consumeChannel.Acked.Count == 2);
+        await Eventually.HoldsAsync(() => _consumeChannel.Acked.Count == 2, _signal);
         _log.Handled.Should().Equal("A-1");
     }
 
@@ -106,7 +115,7 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
 
         await _consumeChannel.DeliverAsync(Delivery(1, "A-2"));
 
-        await Eventually.HoldsAsync(() => _consumeChannel.Nacked.Count == 1);
+        await Eventually.HoldsAsync(() => _consumeChannel.Nacked.Count == 1, _signal);
         _consumeChannel.Nacked.Should().Equal((1UL, true));
         _consumeChannel.Acked.Should().BeEmpty();
     }
@@ -119,7 +128,7 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
 
         await _consumeChannel.DeliverAsync(Delivery(1, "A-3", deliveryCount: 2));
 
-        await Eventually.HoldsAsync(() => _publishChannel.Published.Count == 1);
+        await Eventually.HoldsAsync(() => _publishChannel.Published.Count == 1, _signal);
         var parked = _publishChannel.Published[0];
         parked.Exchange.Should().Be("orders.events.dlx");
         parked.RoutingKey.Should().Be(TestDeliveries.EventName);
@@ -129,7 +138,7 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
 
         // Acknowledged only after the copy was confirmed: the original leaves the queue once, and only
         // once something else holds the message.
-        await Eventually.HoldsAsync(() => _consumeChannel.Acked.Count == 1);
+        await Eventually.HoldsAsync(() => _consumeChannel.Acked.Count == 1, _signal);
         _consumeChannel.Acked.Should().Equal(1UL);
     }
 
@@ -141,7 +150,7 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
 
         await _consumeChannel.DeliverAsync(Delivery(1, "A-4", deliveryCount: 2));
 
-        await Eventually.HoldsAsync(() => _consumeChannel.Nacked.Count == 1);
+        await Eventually.HoldsAsync(() => _consumeChannel.Nacked.Count == 1, _signal);
         _consumeChannel.Nacked.Should().Equal((1UL, false));
         _consumeChannel.Acked.Should().BeEmpty();
     }
@@ -166,7 +175,7 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
 
         await _consumeChannel.DeliverAsync(delivery);
 
-        await Eventually.HoldsAsync(() => _publishChannel.Published.Count == 1);
+        await Eventually.HoldsAsync(() => _publishChannel.Published.Count == 1, _signal);
         _publishChannel.Published[0].Properties.Headers![RabbitMQMessageMapper.ParkReasonHeader]
             .Should().BeOfType<string>()
             .Which.Should().StartWith($"{MessageParkReason.UnknownEventName}:");
@@ -177,7 +186,7 @@ public class RabbitMQSeamBindingTests : IAsyncLifetime
     {
         await _consumeChannel.DeliverAsync(TestDeliveries.Delivery(1, messageId: "not-a-guid"));
 
-        await Eventually.HoldsAsync(() => _publishChannel.Published.Count == 1);
+        await Eventually.HoldsAsync(() => _publishChannel.Published.Count == 1, _signal);
         _publishChannel.Published[0].Properties.Headers![RabbitMQMessageMapper.ParkReasonHeader]
             .Should().BeOfType<string>()
             .Which.Should().StartWith($"{MessageParkReason.UnreadableEnvelope}:");
