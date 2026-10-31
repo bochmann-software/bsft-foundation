@@ -7,6 +7,10 @@ and this project uses a single `BsftFoundationVersion` across all packages.
 
 ## [Unreleased]
 
+## [2.2.0.1]
+
+- Unchanged Foundation runtime republished in lockstep with the framework maintenance release.
+
 ## [2.2.0]
 
 A minor release. From this version on the Foundation packages and the commercial framework built on them carry

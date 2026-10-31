@@ -10,7 +10,7 @@
        on that version as a minimum. From 2.2.0 on it carries the same version as BsftVersion
        (docs/releasing.md, "Two version lines"). -->
   <PropertyGroup>
-    <BsftFoundationVersion>2.2.0</BsftFoundationVersion>
+    <BsftFoundationVersion>2.2.0.1</BsftFoundationVersion>
   </PropertyGroup>
 
   <!-- The target frameworks follow the tier (docs/package-conventions.md, "Tiers: Foundation and
