@@ -61,6 +61,9 @@ console host.
 | `RoutePrefix` | `"/api/localization"` | Where `MapBsftLocalization` mounts the read endpoints. Read once, at map time. |
 | `MaxFilterModules` | `32` | Distinct modules one `?modules=` filter may name. |
 | `MaxFilterModuleNameLength` | `64` | Length of one module name in that filter. |
+| `MaxKeyLength` | `256` | Longest key `ITranslationLookup.Find` accepts; a longer one throws `ArgumentException`. Must be positive. |
+| `MissCacheMaxEntries` | `10000` | Live misses `ITranslationLookup` remembers at once. Must be positive. |
+| `MissCacheLifetime` | `00:00:30` | How long `ITranslationLookup` remembers a miss. Must be positive. |
 
 Every value binds from configuration:
 
@@ -161,6 +164,56 @@ Resolved values are cached for 30 minutes under
 `bsft:i18n:{tenantId ?? "global"}:{locale}:{key}`. Only **positive** results are
 cached, so adding a translation for a key that was previously missing takes
 effect without waiting out a negative-cache entry.
+
+### Resolving for an explicit culture
+
+`ITranslationLookup.Find(tenantId, culture, key)` resolves one key through the
+same chain and the same hit cache as the localizer, but for the tenant and the
+culture the caller names instead of the request's tenant and `CurrentUICulture`
+(the invariant culture resolves under `DefaultLocale`). It exists for callers
+such as a template render that serve a recipient whose language is not the
+thread's.
+
+Unlike the localizer it remembers **misses**, in a cache of its own that never
+touches the shared memory cache: at most `MissCacheMaxEntries` live entries for
+`MissCacheLifetime`, time taken from the monotonic clock of the registered
+`TimeProvider`. An insert into a full cache first drops the entries that have
+expired; a cache full of live misses stores no further miss, so that key is read
+from the store again on the next call. A key added later therefore appears
+within `MissCacheLifetime`, or at once when a `TranslationsUpdatedEvent` is
+published, which clears the miss cache as well as the shared cache. Reads of the
+miss cache take no lock. One tenant can fill the cache and leave the misses of
+others uncached; a per-tenant share of the cap is deferred. The read
+is synchronous, like `ITranslationReader`, and a per-render memo of results
+belongs to the caller.
+
+The localizers and the lookup resolve through one registered chain, so they
+agree on what a key resolves to. The chain matches rows ignoring the case of the
+key and the locale, but cache keys compare tenant, locale and key ordinally and
+case sensitively, because the store may be case sensitive (PostgreSQL, SQLite)
+and a case-insensitive shared cache would make the localizer's answer depend on
+call order. So that spelling variants cannot grow the hit cache, `Find` caches a
+hit only when the requested key and locale equal, ordinally, the spelling of the
+row or seed entry that matched (for a match at the fallback locale, the
+requested locale must be a configured spelling: the default, the fallback or a
+seed locale). A request in another spelling resolves to the same value the
+localizer gives but is not cached and reads the store again. Misses stay in the
+bounded miss cache.
+
+`tenantId` is a dimension of both caches, so it must be the tenant the host
+resolved (for example from `ITenantContext`), never a value taken from template
+or request input. There is deliberately no option bounding the tenants: the
+trust boundary is the host's.
+
+Keys can come from callers that do not control them, such as template authors,
+so the lookup bounds what a caller can make it hold. A key longer than
+`MaxKeyLength` is refused with an `ArgumentException` before any cache or the
+store is touched. A culture whose locale is not configured (neither
+`DefaultLocale`, `FallbackLocale` nor a locale a seed holds) is resolved against
+the store like any other, but neither its hits nor its misses are cached, so
+naming cultures cannot grow the caches; a lookup for such a culture is a store
+read per call. The locale is not mapped onto a configured one for caching,
+because the store may hold rows for it that the fallback would not find.
 
 Publishing a `TranslationsUpdatedEvent` (namespace
 `Bsft.Localization.Abstractions`) through the event aggregator evicts the

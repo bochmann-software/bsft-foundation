@@ -4,7 +4,9 @@ The primitives every other `Bsft.*` package builds on: the exception hierarchy t
 status codes, the validation contracts, the `Unit` type commands return when they produce no result,
 the poll loop background services share, the `IRetryAfter` seam a failure asks to be tried later
 through, the two unit-of-work contracts the framework states its persistence boundaries in, and the
-closure calculator every closure table in the framework is maintained with.
+closure calculator every closure table in the framework is maintained with, and the one canonical rule for e-mail
+addresses and domain names (`InternetDomain`, `EmailAddress`: UTS 46 to A-labels, deterministic on every platform; see
+[docs/core.md](../../docs/core.md#addresses)).
 
 ## Install
 
@@ -36,6 +38,8 @@ Validation: none.
 
 ## Extend
 
+`ISubjectDataEraser` (a package deletes what it stores per account, in the `Revoke` phase for what grants access or the `Data` phase for the rest; run by `IDirectoryAccountAdministrationService.DeleteAsync` in `Bsft.Auth.Oidc.Organization`: idempotent, children before parents, no authorization) and `SubjectDataErasurePhase`; `IAccountDeletionSource` (a registration that announces that accounts can be deleted, which `Bsft.Auth.Idp` checks at startup against its account-status reader).
+
 `IPollLoop` (runs a poll pass until the service stops; `PollLoop` is the implementation and takes an
 interval and a pass delegate), `IPollReporter` (phrases the three things the loop has to say, so a
 service logs in its own vocabulary rather than the loop's), `IValidator<T>` (validates one instance
@@ -48,6 +52,11 @@ host's storage closes its own unit of work — a background sweep, for one, has 
 ride along with) and `ITransactionalUnitOfWork` (runs several writes as one unit, handed over as a
 delegate so a retrying provider can re-run the whole unit rather than resume it half-committed).
 Neither names a `DbContext`; `Bsft.Data` ships `DbContextUnitOfWork<TContext>` behind both.
+`IAmbientTransaction` (an `ITransactionalUnitOfWork` spanning every store enlisted in the scope, which a
+unit started inside it joins; `IsActive` tells a retrying component that only the outermost unit may be
+retried, and `IsTransactionConflict` passes on the provider's conflict classification). `Bsft.Data` ships
+the shared transaction behind it. `AmbientTransactionMisuseException` (an `InvalidOperationException`) is
+what it throws for a use that fails the same way on every attempt, which a retrying component leaves alone.
 `IClosureCalculator` (computes the ancestor and descendant rows of a tree given as `(Id, ParentId)`
 pairs, generic in the row: the caller passes a `(ancestorId, descendantId, depth)` factory for its own
 closure entity; `ClosureCalculator` is the implementation).
@@ -59,6 +68,8 @@ the order callers asked, cancellation semantics documented in docs/core.md).
 `BsftException` is the one type here designed for inheritance:
 derive an application exception from it and `BsftExceptionMiddleware` will map it and carry its
 error code. Every exception the framework itself ships below that base is sealed.
+
+`IHostedWorkStartGate` (a precondition every framework hosted loop waits for before it starts: the schema is migrated, a warm-up is done; `WaitAsync(CancellationToken)`), `IHostedWorkStartGateOverdueSignal` (the optional `IsOverdue()` a health check reads). The loops themselves know nothing about gates: they are registered with `AddBsftGatedHostedService<T>()` from `Bsft.Hosting.StartGates`, which holds them back. See [docs/hosting.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/hosting.md#start-gates-for-hosted-loops).
 
 ## Documentation
 

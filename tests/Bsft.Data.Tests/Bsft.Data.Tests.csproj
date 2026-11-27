@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Bsft.Data\Bsft.Data.csproj" />
     <!-- The cache-scope guard matches the two caching types by name, because Bsft.Data must not
          reference Bsft.Caching. The test references both so that a rename on the caching side fails

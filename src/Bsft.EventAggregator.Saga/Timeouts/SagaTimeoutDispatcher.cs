@@ -122,7 +122,7 @@ public sealed class SagaTimeoutDispatcher : BackgroundService, ISagaTimeoutDrain
                 }
 
                 if (processed == 0)
-                    await Task.Delay(_options.PollInterval, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_options.PollInterval, _timeProvider, stoppingToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

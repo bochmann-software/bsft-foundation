@@ -1,5 +1,6 @@
 using System.Globalization;
 using Bsft.Core;
+using Bsft.Core.Persistence;
 
 namespace Bsft.Resilience.Mediator;
 
@@ -25,6 +26,11 @@ public sealed class BsftResilienceMediatorOptions
     /// Gets or sets the maximum number of retry attempts performed after the initial invocation.
     /// Defaults to 3.
     /// </summary>
+    /// <remarks>
+    /// The value counts retries, not attempts: with the default a request runs at most four times.
+    /// It is at least <c>1</c>; a request that is not to be retried is not marked
+    /// <see cref="RetryableAttribute"/>.
+    /// </remarks>
     public int MaxRetryAttempts { get; set; } = 3;
 
     /// <summary>
@@ -37,12 +43,41 @@ public sealed class BsftResilienceMediatorOptions
     /// Gets or sets the predicate deciding whether a thrown exception is transient and should
     /// be retried. Defaults to <see cref="IsTransientFailure"/>.
     /// </summary>
+    /// <remarks>
+    /// With the shared transaction of <c>Bsft.Data</c> registered, a failure the provider's transaction
+    /// conflict classifier calls a conflict (PostgreSQL <c>40001</c>, <c>40P01</c>) is retried whatever
+    /// this predicate says. That classifier is the intended source for database transients; this
+    /// predicate is for everything else.
+    /// </remarks>
     public Func<Exception?, bool> ShouldRetry { get; set; } = IsTransientFailure;
 
     /// <summary>
-    /// The default retry predicate. Treats failures as transient, but never cancellation or the
+    /// Gets or sets a value indicating whether every command is retried as if it carried
+    /// <see cref="RetryableAttribute"/>. Queries are still retried only where marked. Defaults to
+    /// <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only the outermost retried request runs again: a request dispatched from inside a retried one
+    /// passes through, so its failure reaches the outer attempt instead of being retried on its own.
+    /// Every handler of a retried command runs again, so work outside the database has to be idempotent
+    /// or go through an outbox.
+    /// </para>
+    /// <para>
+    /// A startup validator refuses this option unless every command is a transaction of its own
+    /// (<c>ApplyTransactionToAllCommands()</c> on the mediator): a retried command that is not one would
+    /// repeat the writes its failed attempt already made. A property rather than a fluent
+    /// <c>ApplyRetryToAllCommands()</c> beside the mediator's, because these options bind from
+    /// configuration.
+    /// </para>
+    /// </remarks>
+    public bool ShouldRetryAllCommands { get; set; }
+
+    /// <summary>
+    /// The default retry predicate. Treats failures as transient, but never cancellation, the
     /// deterministic domain exceptions from <c>Bsft.Core</c> (validation, business rule, not found,
-    /// forbidden, conflict), which will not succeed on a retry.
+    /// forbidden, conflict) or a misuse of the ambient transaction
+    /// (<see cref="AmbientTransactionMisuseException"/>), none of which succeeds on a retry.
     /// </summary>
     /// <param name="exception">The exception thrown by the handler, if any.</param>
     /// <returns><see langword="true"/> if the exception is transient and should be retried; otherwise <see langword="false"/>.</returns>
@@ -51,6 +86,7 @@ public sealed class BsftResilienceMediatorOptions
         null => false,
         OperationCanceledException => false,
         ValidationException or BusinessRuleException or NotFoundException or ForbiddenException or ConflictException => false,
+        AmbientTransactionMisuseException => false,
         _ => true,
     };
 
@@ -64,11 +100,11 @@ public sealed class BsftResilienceMediatorOptions
     /// </remarks>
     internal void Validate()
     {
-        if (MaxRetryAttempts < 0)
+        if (MaxRetryAttempts < 1)
         {
             throw new InvalidOperationException(string.Create(
                 CultureInfo.InvariantCulture,
-                $"{nameof(BsftResilienceMediatorOptions)}.{nameof(MaxRetryAttempts)} must not be negative, but it is {MaxRetryAttempts}."));
+                $"{nameof(BsftResilienceMediatorOptions)}.{nameof(MaxRetryAttempts)} must be at least 1, but it is {MaxRetryAttempts}. A request that is not to be retried is not marked [Retryable]."));
         }
 
         if (BaseDelay < TimeSpan.Zero)

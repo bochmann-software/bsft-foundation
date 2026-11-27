@@ -24,8 +24,9 @@ internal sealed class BsftRetentionOptionsValidator : IValidateOptions<BsftReten
         var failures = new List<string>();
 
         // Zero would delete records the instant they were written, which is not a retention policy
-        // anyone configures on purpose; null is how a pass is turned off.
-        if (options.RetentionPeriod is { } retention && retention <= TimeSpan.Zero)
+        // anyone configures on purpose; null is how a pass is turned off. Absolute-expiry mode does not
+        // read the period, so it has nothing to validate.
+        if (!options.UseAbsoluteExpiry && options.RetentionPeriod is { } retention && retention <= TimeSpan.Zero)
         {
             failures.Add(
                 $"{pass}: {nameof(BsftRetentionOptions.RetentionPeriod)} must be positive when it is set, but it is {retention}.");

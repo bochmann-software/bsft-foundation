@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+    <Compile Include="..\Shared\RecordingTimeProvider.cs" Link="Shared\RecordingTimeProvider.cs" />
     <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
   </ItemGroup>
 

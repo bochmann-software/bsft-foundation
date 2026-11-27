@@ -4,6 +4,7 @@ using Bsft.Messaging.Publishing;
 using Bsft.Messaging.Tests.Fakes;
 using Bsft.Messaging.Tests.Support;
 using Bsft.Outbox;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
@@ -18,6 +19,10 @@ public class OutboxDispatcherTests
     private readonly FakeOutboxStore _store = new();
     private readonly FakeMessageBus _bus = new();
     private readonly FixedTimeProvider _time = new(Now);
+
+    // The clock the wait between passes runs on. It fires every wait at once, so a loop test reaches its
+    // next pass without waiting out the poll interval.
+    private readonly RecordingTimeProvider _loopClock = new(Now);
     private readonly FakeMessageRetrySchedule _retrySchedule = new();
 
     private OutboxDispatcher CreateDispatcher(OutboxOptions? options = null)
@@ -25,7 +30,7 @@ public class OutboxDispatcherTests
         var outbox = options ?? new OutboxOptions { PollInterval = TimeSpan.FromMilliseconds(1) };
 
         return new OutboxDispatcher(
-            CreateDrainer(outbox), TestMessagingOptions.For(outbox), NullLogger<OutboxDispatcher>.Instance);
+            CreateDrainer(outbox), TestMessagingOptions.For(outbox), _loopClock, NullLogger<OutboxDispatcher>.Instance);
     }
 
     /// <summary>
@@ -254,6 +259,31 @@ public class OutboxDispatcherTests
     }
 
     [Fact]
+    public async Task The_wait_between_passes_runs_on_the_injected_clock()
+    {
+        var interval = TimeSpan.FromMinutes(1);
+        var clock = new ManualTimeProvider(Now);
+        var outbox = new OutboxOptions { PollInterval = interval };
+        var dispatcher = new OutboxDispatcher(
+            CreateDrainer(outbox), TestMessagingOptions.For(outbox), clock, NullLogger<OutboxDispatcher>.Instance);
+        using var stopping = new CancellationTokenSource();
+
+        var loop = dispatcher.RunLoopAsync(stopping.Token);
+        await clock.WaitForTimerAsync(interval);
+        _store.LeaseCalls.Should().Be(1);
+
+        clock.Advance(interval - TimeSpan.FromTicks(1));
+        _store.LeaseCalls.Should().Be(1, "the interval has not passed on the injected clock");
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        await clock.WaitForTimerAsync(interval);
+        _store.LeaseCalls.Should().Be(2, "the interval passed on the injected clock");
+
+        await stopping.CancelAsync();
+        await loop;
+    }
+
+    [Fact]
     public async Task The_loop_keeps_running_after_a_failed_pass()
     {
         _store.LeaseFailure = new InvalidOperationException("the store is unreachable");
@@ -379,7 +409,7 @@ public class OutboxDispatcherTests
         var dispatcher = CreateDispatcher(new OutboxOptions { PollInterval = TimeSpan.FromMilliseconds(10) });
 
         await dispatcher.StartAsync(CancellationToken.None);
-        var reached = await delivered.WaitAsync(TimeSpan.FromSeconds(10));
+        var reached = await delivered.WaitAsync(TimeSpan.FromSeconds(30));
         await dispatcher.StopAsync(CancellationToken.None);
 
         reached.Should().BeTrue();
@@ -483,12 +513,14 @@ public class OutboxDispatcherTests
         var logger = NullLogger<OutboxDispatcher>.Instance;
         var drainer = CreateDrainer(new OutboxOptions());
 
-        var withoutDrainer = () => new OutboxDispatcher(null!, options, logger);
-        var withoutOptions = () => new OutboxDispatcher(drainer, null!, logger);
-        var withoutLogger = () => new OutboxDispatcher(drainer, options, null!);
+        var withoutDrainer = () => new OutboxDispatcher(null!, options, _loopClock, logger);
+        var withoutOptions = () => new OutboxDispatcher(drainer, null!, _loopClock, logger);
+        var withoutClock = () => new OutboxDispatcher(drainer, options, null!, logger);
+        var withoutLogger = () => new OutboxDispatcher(drainer, options, _loopClock, null!);
 
         withoutDrainer.Should().Throw<ArgumentNullException>().WithParameterName("drainer");
         withoutOptions.Should().Throw<ArgumentNullException>().WithParameterName("options");
+        withoutClock.Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
         withoutLogger.Should().Throw<ArgumentNullException>().WithParameterName("logger");
     }
 

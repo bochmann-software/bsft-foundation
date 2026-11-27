@@ -232,7 +232,7 @@ public sealed class ModuleLoader
 
         foreach (var type in types)
         {
-            if (type is not { IsClass: true, IsAbstract: false } || !typeof(IModule).IsAssignableFrom(type))
+            if (!ModuleCatalog.IsCreatableModule(type))
                 continue;
 
             // Instantiate each candidate exactly once to read its Name, and keep the matching

@@ -41,6 +41,7 @@ Wire and persisted names (JSON property names, configuration keys, table and col
 - N2.3 A name fixed by an external standard or a Microsoft base type is kept verbatim: `WebAuthn`, `p256dh`, `acr`, `amr`, `alg`, `ack`/`nack`, `IKeyRing`, `IFeatureManager`. The glossary lists them under "fixed".
 - N2.4 One term per concept, across the whole framework. The glossary below is the vocabulary. A banned synonym in any identifier is a finding. FDG: "DO choose easily readable identifier names." (FDG/general-naming-conventions#word-choice).
 - N2.5 No two public types share a simple name within the framework, and no type uses a generic name (`Node`, `Log`, `Message`, `Item`) without a qualifier. FDG: "DO NOT assign type names that would conflict with other types within a single technology." and "DO NOT introduce generic type names such as `Element`, `Node`, `Log`, and `Message`." (FDG/names-of-namespaces#namespaces-and-type-name-conflicts).
+  The one exception is a type that moved to another namespace: its old declaration stays, public and marked `[EditorBrowsable(EditorBrowsableState.Never)]`, so binaries compiled against it still bind (a type forward cannot change the namespace). One visible declaration per name remains the rule.
   - Provider packages prefix their provider (`PostgresCreateFullTextIndexRequest`).
   - A type several packages need is declared once, in the lowest package all of them already reach, not copied into each: `RequiredPermissionsMetadata` lives in `Bsft.Http`, which the fifteen HTTP packages that attach it reference without it adding a dependency.
   - A satellite that would need a second type of a family's name uses the family's type instead (2.0.0 removed Billing's `SandboxTenant` copies in favour of `Bsft.Data`'s).
@@ -77,6 +78,7 @@ Wire and persisted names (JSON property names, configuration keys, table and col
   | `Validator` | implements `IValidateOptions<T>` or validates a value |
   | `StartupValidator` | an `IStartupValidator` that checks wiring at startup |
   | `Builder` | fluent configuration |
+  | `Eraser` | deletes what one package stores about a subject (`ISubjectDataEraser`); its method is `Erase` (N5.7) |
 
   - `Manager` is not a role. The one exception is `IFeatureManager`, which mirrors `Microsoft.FeatureManagement`.
   - `Helper`, `Util` and `Utils` are banned.
@@ -144,11 +146,14 @@ Wire and persisted names (JSON property names, configuration keys, table and col
   | `Delete` | destroys an entity |
   | `Remove` | detaches an association or a cache entry |
   | `Purge` | deletes expired rows in bulk |
+  | `Erase` | deletes every row a package stores about one subject when the account is deleted; idempotent (`ISubjectDataEraser.EraseAsync`, `ICredentialErasureStore.EraseAsync`) |
   | `Revoke` | invalidates a credential or grant |
 
   - `Prune` and `Clean` are banned.
   - The precedent is ASP.NET Core Identity, where `UserManager.DeleteAsync` sits beside `UserManager.RemoveFromRoleAsync` (https://learn.microsoft.com/dotnet/api/microsoft.aspnetcore.identity.usermanager-1).
 - N5.8 DI and pipeline entry points (package-conventions section 4, unchanged): `AddBsft<Feature>`, `UseBsft<Feature>`, `MapBsft<Feature>`. Classes are `<Feature>ServiceCollectionExtensions`, `<Feature>ApplicationBuilderExtensions` and `<Feature>EndpointRouteBuilderExtensions`, in `<Package>.DependencyInjection`, never in `Microsoft.Extensions.DependencyInjection`. Options library guidance: "DO NOT use the `Microsoft.Extensions.DependencyInjection` namespace for non-official Microsoft packages." (https://learn.microsoft.com/dotnet/core/extensions/options-library-authors#namespace-guidance).
+  - N5.8 exception (closed list): `Bsft.Templating.Notifications` names its entry-point class `RenderingServiceCollectionExtensions`, because the derivable names are either over the forty-character `type-name-length` (`TemplatingNotificationsServiceCollectionExtensions`) or a duplicate of `Bsft.Notifications`'s `NotificationsServiceCollectionExtensions` (N2.5). The method keeps `AddBsftTemplatingNotifications`. See package-conventions section 4, "Documented exceptions".
+  - A family whose entry point returns a builder in the `AddHttpClient` shape takes a satellite's per-profile additions on that builder: `Bsft.Templating`'s `ITemplatingBuilder`. Such a satellite's builder methods are unprefixed like the builder's own (`AddEscaper`, `AddFormattingFunctions`), because the builder already carries `Bsft`, and live in a class `<Feature>TemplatingBuilderExtensions` in `<Package>.DependencyInjection` (package-conventions section 4, "Documented exceptions"). A satellite that adds a container-wide service keeps its `<Feature>ServiceCollectionExtensions`.
 
 ## N6 Parameters
 
@@ -224,7 +229,10 @@ Wire and persisted names (JSON property names, configuration keys, table and col
 | SignIn / Login | SignIn = cookie session operation. Login = OIDC/Identity page and flow. | LogIn, LogOut, Signin | `SignInAsync`, `LoginPath` |
 | AI | The AI package family and token. | Ai | `Bsft.AI`, `AIDefaults` |
 | EFCore | EF Core provider packages and types. | EfCore, Ef | `Bsft.Chat.EFCore`, `EFCoreSagaStore` |
-| ClientApp | A browser application whose files a server host serves: the host page, its static assets and the version endpoint (`Bsft.Hosting.ClientApp`). Not the BFF, which holds the session for such an application. | | `Bsft.Hosting.ClientApp`, `ClientAppDefaults` |
+| Capability | Something a package or module provides. In a host's capability document, a camelCase `CapabilityToken` a module contributes (`auditTrail`) that a client switches a feature on by (`Bsft.Hosting.Capabilities`). Never a named, invocable operation (ADR-0006). | | `CapabilityToken`, `ICapabilityContributor`, `MapBsftCapabilities` |
+| ClientApp | A browser application whose files a server host serves: the host page, its static assets and the documents around them, such as the runtime configuration, the version endpoint and the client-error intake (`Bsft.Hosting.ClientApp`). Not the BFF, which holds the session for such an application. | | `Bsft.Hosting.ClientApp`, `ClientAppDefaults` |
+| OpenApi | The OpenAPI description of an HTTP API and the API versioning that shapes it (`Bsft.Hosting.OpenApi`). Written `OpenApi`, as in `Microsoft.OpenApi`. `Swagger` stays the name of the Swashbuckle-specific types (`BsftSwaggerOptions`, `AddBsftSwagger`). | OpenAPI (in an identifier) | `Bsft.Hosting.OpenApi` |
+| TokenMediation | A host that keeps the refresh token in a server-side session and hands a browser app short-lived access tokens per audience (`Bsft.Auth.TokenMediation`, the draft's "token-mediating backend"). Not the BFF, which proxies API calls so that no token reaches the browser. | | `BsftTokenMediationOptions`, `TokenMediationErrorCodes` |
 
 ¹ `Settings` stays as the name of `Bsft.Settings` (stored runtime settings, a distinct concept from configuration).
 
@@ -268,7 +276,7 @@ case that fires and a case that must not fire for each rule.
 | `name-type-suffix` | N4.2, N4.5, N4.6, N5.7: no `Impl`, `Helper(s)`, `Util(s)`, `Utility`, `Manager`, `StartupCheck`, `Details`, `Ex`, `New` suffix; no `Enum`/`Flag(s)` on an enum, no `Delegate` on a delegate; no `Prune` token. `IFeatureManager`, `FeatureManager` and `AuthenticatorDataFlags` (WebAuthn's name) are exempt | top-level types in `src/`, `samples/` |
 | `name-options-validator` | N4.5: an `IValidateOptions<T>` implementation ends in `Validator` | as above |
 | `name-hosted-service` | N4.7: a `BackgroundService`/`IHostedService`/`IHostedLifecycleService` is not `*Job`, and not `*Service` unless `*HostedService` | as above |
-| `name-duplicate` | N2.5: no two public types of `src/` share a simple name and arity | public top-level types in `src/` |
+| `name-duplicate` | N2.5: no two public types of `src/` share a simple name and arity, unless all but one are hidden with `[EditorBrowsable(Never)]` | public top-level types in `src/` |
 | `name-namespace-type` | N3.4: no type is named like a segment of its own namespace | top-level types in `src/`, `samples/`, `tests/` |
 | `name-parameter` | N6.1: the banned parameter names for `CancellationToken`, `IConfiguration`, `TimeProvider`, `ClaimsPrincipal`, `HttpContext`, `IServiceProvider` | parameters of declared methods, constructors and local functions in `src/`, `samples/` (lambdas exempt) |
 | `name-test-class` | N8.1: a class declaring `[Fact]`/`[Theory]` tests ends in `Tests` and has no underscore | `tests/` |

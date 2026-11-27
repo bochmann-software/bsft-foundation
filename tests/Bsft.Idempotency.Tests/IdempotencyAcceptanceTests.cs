@@ -40,6 +40,23 @@ public class IdempotencyAcceptanceTests
     }
 
     [Fact]
+    public async Task ASensitiveResponse_IsReplayedByteForByteFromItsSealedRecord()
+    {
+        await using var host = await IdempotencyTestHost.StartAsync();
+
+        var first = await host.Client.SendAsync(IdempotencyTestHost.Post("/secrets", "key-secret"));
+        var second = await host.Client.SendAsync(IdempotencyTestHost.Post("/secrets", "key-secret"));
+
+        first.StatusCode.Should().Be(HttpStatusCode.Created);
+        second.StatusCode.Should().Be(HttpStatusCode.Created);
+        Replayed(second).Should().BeTrue();
+        second.Headers.Location!.OriginalString.Should().Be("/orders/1");
+        (await second.Content.ReadAsByteArrayAsync())
+            .Should().Equal(await first.Content.ReadAsByteArrayAsync());
+        host.Probe.Invocations.Should().Be(1);
+    }
+
+    [Fact]
     public async Task TwoRequestsStartedAtOnce_LetExactlyOneRunAndTellTheOtherToComeBack()
     {
         await using var host = await IdempotencyTestHost.StartAsync();

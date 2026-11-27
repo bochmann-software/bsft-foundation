@@ -31,8 +31,9 @@ Licensed under the [MIT License](LICENSE). Packages are published on
 | Messaging | [`Bsft.Messaging.RabbitMQ`](docs/messaging.md) | The RabbitMQ transport. |
 | Messaging | [`Bsft.Messaging.Correlation`](docs/messaging.md) | Carries the correlation id across messages. |
 | Messaging | [`Bsft.Outbox.Abstractions`](docs/outbox.md) | The lease protocol, payload and side effect of a durable outbox row. |
-| Messaging | [`Bsft.Outbox`](docs/outbox.md) | The outbox kernel: drain pass, retry schedule and retirement policy every outbox shares. |
+| Messaging | [`Bsft.Outbox`](docs/outbox.md) | The outbox kernel: drain pass, retry schedule and retirement policy every outbox shares, and the optional hosted drain worker. |
 | Messaging | [`Bsft.Outbox.EFCore`](docs/outbox.md) | An EF Core implementation of the outbox lease protocol. |
+| Messaging | [`Bsft.Outbox.Postgres`](docs/outbox.md) | PostgreSQL `LISTEN` wake-up for any outbox table, so the hosted drain worker drains on notification. |
 | Data | [`Bsft.Data.Contracts`](docs/data.md) | Paging, filtering, sorting and search contracts with no dependencies, for servers and clients alike. |
 | Data | [`Bsft.Data`](docs/data.md) | Query filtering, pagination, multi-tenancy and full-text search ([search.md](docs/search.md)). |
 | Data | [`Bsft.Data.Postgres`](docs/search.md) | The PostgreSQL full-text search provider. |
@@ -44,6 +45,7 @@ Licensed under the [MIT License](LICENSE). Packages are published on
 | Background work | [`Bsft.Scheduling.EFCore`](docs/scheduling.md) | EF Core persistence for job runs. |
 | Background work | [`Bsft.Scheduling.Correlation`](docs/scheduling.md) | Carries the correlation id into job execution. |
 | Background work | [`Bsft.Retention`](docs/retention.md) | A hosted sweeper that runs one bounded purge pass per set of records a package owns. |
+| Background work | [`Bsft.Hosting.StartGates`](docs/hosting.md#start-gates-for-hosted-loops) | Start gates for hosted background loops: register a precondition once and every gated loop starts only after it opened. |
 | Correlation | [`Bsft.Correlation.Abstractions`](docs/correlation.md) | The correlation id contract, free of ASP.NET Core. |
 | Correlation | [`Bsft.Correlation`](docs/correlation.md) | Correlation ids for ASP.NET Core, inbound and outbound. |
 | Correlation | [`Bsft.Correlation.Http`](docs/correlation.md) | The outbound `HttpClient` half, safe for clients. |
@@ -59,7 +61,8 @@ Licensed under the [MIT License](LICENSE). Packages are published on
 | Cross-cutting | [`Bsft.Resilience.Mediator`](docs/resilience.md) | Retry as a pipeline behavior. |
 | Cross-cutting | [`Bsft.Localization`](docs/localization.md) | Database-backed localization with tenant support. |
 | Cross-cutting | [`Bsft.Localization.EFCore`](docs/localization.md) | EF Core persistence for translations and their seed. |
-| Hosting | [`Bsft.Hosting`](docs/hosting.md) | ASP.NET Core host defaults: OpenAPI, versioning, CORS, rate limiting, health checks, ProblemDetails. |
+| Hosting | [`Bsft.Hosting`](docs/hosting.md) | ASP.NET Core host defaults: CORS, rate limiting, health checks, ProblemDetails, without Swashbuckle. |
+| Hosting | [`Bsft.Hosting.OpenApi`](docs/hosting.md) | OpenAPI and API versioning, plus `AddBsftDefaults` composing every hosting default. |
 | Hosting | [`Bsft.Hosting.BackgroundWork`](docs/hosting.md#background-work) | Run-once startup operations and bounded batching pipelines for a generic host, without the web stack. |
 | Hosting | [`Bsft.Modules`](docs/modules.md) | Composes an application from independently versioned modules. |
 | Hosting | [`Bsft.Http`](docs/http.md) | HTTP primitives: entity tags, conditional GET and conditional writes. |

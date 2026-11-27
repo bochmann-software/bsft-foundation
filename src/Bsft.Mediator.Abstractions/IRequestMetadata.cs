@@ -24,6 +24,21 @@ public interface IRequestMetadata
     Type RequestType { get; }
 
     /// <summary>
+    /// Gets a value indicating whether the request is a command — its type implements
+    /// <see cref="ICommand{TResult}"/>, which a command without a result does through
+    /// <see cref="ICommand"/> — rather than a query.
+    /// </summary>
+    /// <remarks>
+    /// The one answer every behavior with an all-commands policy uses, so the transaction and the retry
+    /// behavior can never disagree about what a command is. The default implementation reflects on
+    /// <see cref="RequestType"/> on every call, so an implementation written before this member existed
+    /// keeps compiling; the shipped one answers from the value it cached once per request type.
+    /// </remarks>
+    bool IsCommand => Array.Exists(
+        RequestType.GetInterfaces(),
+        static contract => contract.IsGenericType && contract.GetGenericTypeDefinition() == typeof(ICommand<>));
+
+    /// <summary>
     /// Returns the single attribute of the given type declared on the request, or <c>null</c> when the
     /// request carries none.
     /// </summary>

@@ -25,6 +25,36 @@ public class BsftDataOptionsValidatorTests
             .Succeeded.Should().BeTrue();
 
     [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    [InlineData(int.MaxValue)]
+    public void Validate_KeysetMaxPageSizeOutOfRange_Fails(int maxPageSize)
+    {
+        var options = new BsftDataOptions();
+        options.KeysetPaging.MaxPageSize = maxPageSize;
+
+        var result = new BsftDataOptionsValidator().Validate(name: null, options);
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain("KeysetPaging.MaxPageSize").And.Contain($"'{maxPageSize}'");
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(int.MaxValue - 1)]
+    public void Validate_KeysetMaxPageSizeAtItsBounds_Succeeds(int maxPageSize)
+    {
+        var options = new BsftDataOptions();
+        options.KeysetPaging.MaxPageSize = maxPageSize;
+
+        new BsftDataOptionsValidator().Validate(name: null, options).Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void KeysetPaging_Default_IsTheOffsetSurfacesMaximum() =>
+        new BsftDataOptions().KeysetPaging.MaxPageSize.Should().Be(DataDefaults.KeysetMaxPageSize).And.Be(100);
+
+    [Theory]
     [InlineData("")]
     [InlineData("   ")]
     public void Validate_BlankHeaderName_Fails(string headerName)
@@ -80,4 +110,42 @@ public class BsftDataOptionsValidatorTests
     [Fact]
     public void ValidateOptionsResult_IsTheContractTheOptionsInfrastructureExpects() =>
         new BsftDataOptionsValidator().Should().BeAssignableTo<IValidateOptions<BsftDataOptions>>();
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(4096)]
+    public void Validate_TenantKeysNodeIdOutOfRange_Fails(int nodeId)
+    {
+        var options = new BsftDataOptions();
+        options.TenantKeys.NodeId = nodeId;
+
+        var result = new BsftDataOptionsValidator().Validate(name: null, options);
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain("NodeId").And.Contain("must be between 0");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4095)]
+    public void Validate_TenantKeysNodeIdInRange_Succeeds(int nodeId)
+    {
+        var options = new BsftDataOptions();
+        options.TenantKeys.NodeId = nodeId;
+
+        var result = new BsftDataOptionsValidator().Validate(name: null, options);
+
+        result.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_TenantKeysNodeIdNull_Succeeds()
+    {
+        var options = new BsftDataOptions();
+        // NodeId defaults to null, so no explicit assignment needed
+
+        var result = new BsftDataOptionsValidator().Validate(name: null, options);
+
+        result.Succeeded.Should().BeTrue();
+    }
 }

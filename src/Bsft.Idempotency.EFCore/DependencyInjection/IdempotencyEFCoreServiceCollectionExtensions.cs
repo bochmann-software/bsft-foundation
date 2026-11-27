@@ -1,3 +1,4 @@
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -47,7 +48,7 @@ public static class IdempotencyEFCoreServiceCollectionExtensions
         services.RemoveAll<IIdempotencyStore>();
         services.AddScoped<IIdempotencyStore, EFCoreIdempotencyStore>();
 
-        services.AddHostedService<IdempotencyRecordSweeper>();
+        services.AddBsftGatedHostedService<IdempotencyRecordSweeper>();
 
         return services;
     }

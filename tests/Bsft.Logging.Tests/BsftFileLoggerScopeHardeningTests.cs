@@ -245,7 +245,7 @@ public sealed class BsftFileLoggerScopeHardeningTests : IDisposable
             {
                 using (logger.BeginScope(new Dictionary<string, object> { ["RunId"] = "child" }))
                 {
-                    await Task.Delay(5);
+                    await Task.Yield();
                     logger.LogInformation("child");
                 }
             });

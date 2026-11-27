@@ -1,3 +1,4 @@
+using Bsft.Scheduling.Execution;
 using Bsft.Scheduling.StoredSchedules;
 using Bsft.Scheduling.Tests.Fakes;
 using Bsft.Scheduling.Tests.Support;
@@ -22,6 +23,30 @@ public class SchedulingContractTypesTests
         context.AttemptNumber.Should().Be(1);
         context.CorrelationId.Should().Be("corr-1");
         context.Payload.Should().Be("payload");
+    }
+
+    [Fact]
+    public void AHandBuiltExecutionContextRefusesToRecordAResultRatherThanDiscardingIt()
+    {
+        var context = new JobExecutionContext(7, "report", _now, _now, 1, null, null);
+
+        var act = () => context.ResultRecorder.Record("report/v1", new { Rows = 3 });
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ResultRecorder*");
+    }
+
+    [Fact]
+    public void AHandBuiltExecutionContextTakesARecorderOfTheTestsOwn()
+    {
+        var run = new JobRun { Id = 7, JobName = "report" };
+        var context = new JobExecutionContext(7, "report", _now, _now, 1, null, null)
+        {
+            ResultRecorder = new JobRunResultRecorder(run, 4096),
+        };
+
+        context.ResultRecorder.Record("report/v1", new { Rows = 3 });
+
+        run.Result!.Value.GetRawText().Should().Be("""{"rows":3}""");
     }
 
     [Fact]

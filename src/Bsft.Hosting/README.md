@@ -1,9 +1,11 @@
 ﻿# Bsft.Hosting
 
-The ASP.NET Core host defaults of the BSFT framework: Swagger, API versioning, CORS, rate limiting,
-response compression, JSON, HTTPS redirection, health checks, the exception middleware that turns a
-`BsftException` into RFC 9457 ProblemDetails, the CRUD convention's filter transport, host logging
-policy and startup validation — registered by one call and ordered by another.
+The ASP.NET Core host defaults of the BSFT framework: CORS, rate limiting, response compression, JSON,
+HTTPS redirection, health checks, the exception middleware that turns a `BsftException` into RFC 9457
+ProblemDetails, the CRUD convention's filter transport, host logging policy and startup validation, each
+with its own `AddBsft*` registration and, where it has middleware, a `UseBsft*` step. Swagger, API
+versioning and the one-call `AddBsftDefaults` / `UseBsftDefaults` that composes everything are in
+`Bsft.Hosting.OpenApi`.
 
 ## Install
 
@@ -15,32 +17,59 @@ Requires `Bsft.Core`, `Bsft.Correlation`, `Bsft.Data.Contracts` (the filter AST 
 deliberately not `Bsft.Data`, so this package stays free of EF Core), `Bsft.Logging` (the file
 provider the host logging policy switches on) and `Bsft.Hosting.BackgroundWork`, which holds the
 background-work pieces below. It carries a `FrameworkReference` to
-`Microsoft.AspNetCore.App` plus Swashbuckle and Asp.Versioning, so a worker or console host should
-reference the individual packages it needs rather than this one: a console tool that only wants the
-background work takes `Bsft.Hosting.BackgroundWork`.
+`Microsoft.AspNetCore.App` and no Swashbuckle or Asp.Versioning, so a host that pins its own Swashbuckle
+version (to keep a generated OpenAPI document byte-identical, for one) can take it. A worker or console
+host should reference the individual packages it needs rather than this one: a console tool that only
+wants the background work takes `Bsft.Hosting.BackgroundWork`.
 
 ## Register
 
 ```csharp
-services.AddBsftCorrelation();
-services.AddBsftDefaults(defaults => defaults
-    .Swagger(swagger => swagger.Title = "Orders API")
-    .Cors(cors => cors.AllowOrigins("https://app.example.com").AllowCredentials()));
+using Bsft.Correlation.DependencyInjection;
+using Bsft.Hosting;                     // BsftExceptionMiddleware
+using Bsft.Hosting.DependencyInjection;
 
-// or bound from configuration, sections "Bsft:Hosting:*"
-services.AddBsftDefaults(configuration);
+services.AddBsftCorrelation();
+services.AddBsftHttpsDefaults(configuration);
+services.AddBsftCors(configuration, cors => cors.AllowOrigins("https://app.example.com").AllowCredentials());
+services.AddBsftRateLimiting(configuration);
+services.AddBsftHealthChecks();
 ```
 
 ```csharp
-app.UseBsftDefaults();
+app.UseBsftHttpsRedirection();
+app.UseBsftCorrelation();
+app.UseMiddleware<BsftExceptionMiddleware>();
+app.UseAuthentication(); // before the limiter, so a Principal partition sees the caller
+app.UseBsftRateLimiting();
+app.UseBsftCors();
+app.UseBsftHealthChecks();
 ```
 
-`AddBsftCorrelation()` is not optional: `UseBsftDefaults()` puts `UseBsftCorrelation()` into the
-pipeline but does not register its services. Each feature also has its own `AddBsft*` / `UseBsft*`
-pair — `AddBsftCors`, `AddBsftSwagger`, `AddBsftApiVersioning`, `AddBsftRateLimiting`,
-`AddBsftCompression`, `AddBsftJsonDefaults`, `AddBsftHttpsDefaults`, `AddBsftHostLogging`,
-`AddBsftFilterTransport`, `AddBsftHealthChecks`, `AddBsftStartupValidation` — so a host can compose
-the pipeline itself.
+The exception middleware has no `UseBsft*` step of its own: a host composing the pipeline adds it with
+`app.UseMiddleware<BsftExceptionMiddleware>()` after correlation, which it needs registered
+(`AddBsftCorrelation()`) to stamp the correlation id on the ProblemDetails. A hand-composed pipeline gets
+only what it lists: `UseBsftDefaults` turns HTTPS redirection and HSTS on by default, so a host composing its
+own calls `UseBsftHttpsRedirection()` first and leaves it out only when TLS terminates upstream.
+
+Each feature has its own `AddBsft*` registration, and a `UseBsft*` step where it adds middleware —
+`AddBsftCors`, `AddBsftRateLimiting`, `AddBsftCompression`, `AddBsftJsonDefaults`, `AddBsftHttpsDefaults`,
+`AddBsftHostLogging`, `AddBsftSecurityHeaders` (`UseBsftSecurityHeaders`), `AddBsftFilterTransport`, `AddBsftHealthChecks`, `AddBsftStartupValidation` — so a
+host composes the pipeline itself. The one-call `AddBsftDefaults` / `UseBsftDefaults`, which registers
+all of them together with Swagger and API versioning and orders the middleware, is in
+`Bsft.Hosting.OpenApi` (`using Bsft.Hosting.OpenApi.DependencyInjection;`).
+
+CORS can also expose response headers, accept origins by a code-only predicate and use another policy name;
+`IBsftCorsOriginEvaluator` hands the same origin decision to code outside CORS:
+
+```csharp
+services.AddBsftCors(configuration, cors => cors
+    .ExposeHeaders("ETag", "Location")
+    .AllowOriginsWhere(origin => origin.StartsWith("http://localhost", StringComparison.Ordinal))
+    .AllowCredentials());
+// cors.PolicyName = "App" renames the policy; UseBsftCors() applies the configured name.
+// inject IBsftCorsOriginEvaluator and call IsOriginAllowed(origin), e.g. for a WebSocket handshake.
+```
 
 Background work lives in `Bsft.Hosting.BackgroundWork`, which this package references, and has its own pair,
 registered on its own (`using Bsft.Hosting.BackgroundWork.DependencyInjection;`):
@@ -70,9 +99,9 @@ stop flush has its own deadline. Options live under `Bsft:Hosting:Pipelines:<ite
 ## Configure
 
 Each feature keeps its own options type and its own section rather than nesting into one hosting
-options type, because a host may call `AddBsftCors` alone and never call `AddBsftDefaults`. Every
-`AddBsft*` above has an `IConfiguration` overload binding the section below; a `configure` delegate
-passed alongside runs after the section, so code wins where code spoke.
+options type, because a host may call `AddBsftCors` alone and never call `AddBsftDefaults` (from
+`Bsft.Hosting.OpenApi`). Every `AddBsft*` above has an `IConfiguration` overload binding the section
+below; a `configure` delegate passed alongside runs after the section, so code wins where code spoke.
 
 | Option | Default | Effect |
 | --- | --- | --- |
@@ -97,23 +126,19 @@ passed alongside runs after the section, so code wins where code spoke.
 | `BsftHostLoggingOptions.EnableConsole` / `EnableDebug` | `true` | Which providers the host switches on. |
 | `BsftRateLimitingOptions.PermitLimit` (`Bsft:Hosting:RateLimiting`) | `100` | Requests per window. At least one. |
 | `BsftRateLimitingOptions.WindowSeconds` | `60` | Length of the fixed window. At least one. |
+| `BsftRateLimitingOptions.Window` | `null` | The window as a `TimeSpan` (`"00:00:30"`); wins over `WindowSeconds` when set. At least one second. Limiters have one too. |
+| `BsftRateLimitingOptions.EnableDefaultPolicy` | `true` | Registers the default policy `BsftFixedWindow`; `false` registers none. |
+| `BsftRateLimitingOptions.GlobalLimiter` (`...:RateLimiting:GlobalLimiter`) | `null` | One limiter, configured like a named policy's, that covers every request (`RateLimiterOptions.GlobalLimiter`). |
+| `BsftRateLimitingOptions.CustomPartitionKeyPrefix` | `custom:` | Prefix of a `Custom` selector's partition key; may be empty. |
 | `BsftRateLimitingOptions.RetryAfterSeconds` | `1` | `Retry-After` of a rejection whose limiter cannot estimate one (a concurrency limiter). At least one. |
 | `BsftRateLimitingOptions.Policies` (`...:RateLimiting:Policies:<name>`) | empty | Named policies, each a chain of `Limiters` a request has to pass all of. See below. |
 | `BsftRateLimitingOptions.PartitionKeySelectors` | empty | Code only: named `Func<HttpContext, string?>` a `Custom` limiter refers to. |
-| `BsftSwaggerOptions.Title` (`Bsft:Hosting:Swagger`) | entry assembly name | Document title. Must not be blank. |
-| `BsftSwaggerOptions.Version` | `"v1"` | Document version, and the document's name. Must not be blank. |
-| `BsftSwaggerOptions.IsBearerAuthEnabled` | `false` | Adds the bearer scheme. `AddBearerAuth()` is the fluent way of setting it. |
-| `BsftSwaggerOptions.IncludesXmlComments` | `true` | Feeds every XML doc file next to the assembly into the document. |
-| `BsftVersioningOptions.DefaultVersion` (`Bsft:Hosting:Versioning`) | `1.0` | Whole part is the major, first decimal the minor. Not negative. |
-| `BsftVersioningOptions.ShouldAssumeDefaultVersionWhenUnspecified` | `true` | Unversioned requests get the default. |
-| `BsftVersioningOptions.ShouldReportApiVersions` | `true` | Reports available versions in response headers. |
 
 Validation: the filter transport bounds are checked eagerly at `AddBsftFilterTransport` and again on
 start — every bound must be positive and `MaxJsonReaderDepth` must be at least `MaxDepth`, otherwise
 the reader rejects a filter before the friendlier AST check can. On start, a blank CORS origin, a
-non-positive rate-limit value or an inconsistent named rate-limiting policy (named by its configuration path),
-a blank Swagger title or version and a negative default API version are
-each rejected, naming the member.
+non-positive rate-limit value and an inconsistent named rate-limiting policy (named by its configuration path)
+are each rejected, naming the member.
 
 `BsftHostLoggingOptions.FileLogging(...)` carries a delegate and `BsftHealthCheckConfiguration` the
 external-service and disk-storage checks to build, neither of which a configuration provider can
@@ -128,7 +153,10 @@ name — the limiter is not applied globally) and `ConsoleFormatterName` (`"bsft
 A named policy is a chain of limiters (`PolicyLimiterOptions`): `Kind` is `FixedWindow`, `SlidingWindow`,
 `TokenBucket` or `Concurrency`, `PartitionBy` is `ClientAddress`, `Principal` (claim `ClaimType`, default
 `NameIdentifier`; anonymous falls back to the address), `Custom` (a selector of `PartitionKeySelectors`) or
-`Global`. An app declares, say, three uploads in flight per guest and 64 overall from configuration alone:
+`Global`. `Principal` budgets per authenticated caller; with `ClaimType` set to a client-id claim
+(`client_id` or `azp`, whichever the issuer writes) it budgets per OAuth client instead.
+
+An app declares, say, three uploads in flight per guest and 64 overall from configuration alone:
 
 ```json
 "Bsft": { "Hosting": { "RateLimiting": { "Policies": {
@@ -143,10 +171,11 @@ ProblemDetails body carrying `errorCode` `RATE_LIMITED` (`HostingDefaults.RateLi
 `bsft.rate_limiting.rejections` per policy. A principal partition needs authentication to run before
 `UseBsftRateLimiting`. Details in [docs/hosting.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/hosting.md#rate-limiting).
 
-`UseBsftRateLimiting` needs `AddBsftRateLimiting` (or `AddBsftDefaults`). ASP.NET Core never disposes its rate
-limiting middleware's endpoint limiter nor `RateLimiterOptions.GlobalLimiter`, and each runs a timer that would
-keep a stopped host reachable; the container disposes both when the host is disposed. A global limiter therefore
-belongs to one host and is not shared between hosts.
+`UseBsftRateLimiting` needs `AddBsftRateLimiting` (or `AddBsftDefaults` from `Bsft.Hosting.OpenApi`).
+ASP.NET Core never disposes its rate limiting middleware's endpoint limiter nor
+`RateLimiterOptions.GlobalLimiter`, and each runs a timer that would keep a stopped host reachable; the
+container disposes both when the host is disposed. A global limiter therefore belongs to one host and is
+not shared between hosts.
 
 ## Extend
 
@@ -157,6 +186,14 @@ reject it) is registered with `TryAdd`, so a host that registered its own parser
 or application may add its own. `IObserverFailureReporter` and `IObserverGuard` from `Bsft.Core` are registered by `AddBsftObservers` with `TryAdd`, so a host that registered its own keeps it. `BsftHealthCheckConfiguration` composes health checks from the
 outside. Nothing else here is replaceable — the middleware, the console formatter and the per-feature
 registrations are concrete on purpose.
+
+`BsftHealthCheckConfiguration.AddHostedWorkStartGates()` opts in to the `hosted-work-start-gates` health check (tag `ready`), which is unhealthy while a registered start gate that implements `IHostedWorkStartGateOverdueSignal` reports itself overdue. The gates themselves are registered with `AddBsftHostedWorkStartGate<TGate>()` from `Bsft.Hosting.StartGates`. See [docs/hosting.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/hosting.md#start-gates-for-hosted-loops).
+
+Exception mapping is extensible without replacing the middleware: `AddBsftExceptionMapper<T>()` registers an `IBsftExceptionMapper`
+(asked before the built-in mapping, first result wins; status, title, detail, extensions and headers such as `Retry-After`),
+`AddBsftExceptionObserver<T>()` an `IBsftExceptionObserver` told about every mapped exception (failures contained), and
+`AddBsftExceptionHandler()` an `IExceptionHandler` for `UseExceptionHandler()` with the same mapping. A mapped 500 never
+carries exception text. See [docs/hosting.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/hosting.md#mapping-your-own-exceptions).
 
 ## Documentation
 

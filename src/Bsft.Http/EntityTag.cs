@@ -1,4 +1,5 @@
 using System.Text;
+using Bsft.Core;
 
 namespace Bsft.Http;
 

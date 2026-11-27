@@ -111,10 +111,10 @@ call or a database command that timed out. Reading that second case as a
 shutdown is the mistake this type exists to prevent: the host keeps running
 while the service silently stops doing its work.
 
-A service supplies three things:
+A service supplies four things:
 
 ```csharp
-new PollLoop(pass, reporter, interval).RunAsync(stoppingToken);
+new PollLoop(pass, reporter, interval, timeProvider).RunAsync(stoppingToken);
 ```
 
 `pass` is `Func<CancellationToken, Task<PollPassOutcome>>` — the work of one
@@ -127,6 +127,11 @@ and returns `PollAgain`; a sweep on a fixed cadence always waits.
 a pass failed, that a pass was cancelled without a stop request, or that the loop
 is unwinding because the service is stopping. The loop holds no logger: each
 service phrases these three events in its own words and at its own level.
+
+`interval` is the wait after a pass, and `timeProvider` is the clock that wait runs
+on. A service passes the `TimeProvider` it was constructed with, which its AddXxx
+registration resolves from the container (`TryAddSingleton(TimeProvider.System)`), so a
+test that registers a fake clock moves every wait of the service by advancing it.
 
 A failed pass is reported as the exception it failed with, so an alert rule keyed
 on the exception type sees the type the pass actually threw. Only a pass whose
@@ -222,6 +227,38 @@ package take `Bsft.Core` precisely because `Bsft.Core` widens its closure by
 nothing. `Bsft.Data.Contracts` is the query surface a browser or console client
 speaks; a persistence seam is not part of that vocabulary, and putting it there
 would send every consumer of the DTOs a contract about committing.
+
+`IAmbientTransaction` (from 2.2.1-preview.1) is an `ITransactionalUnitOfWork` that
+spans every store enlisted in the scope, so a unit started while one is open
+joins it instead of opening its own:
+
+```csharp
+public interface IAmbientTransaction : ITransactionalUnitOfWork
+{
+    bool IsActive { get; }
+    bool IsTransactionConflict(Exception exception);
+}
+```
+
+`IsActive` is what the mediator's retry behavior asks before retrying a request:
+only the outermost unit may be retried, as a whole. It is true only in the async
+flow that opened the unit, so a parallel flow of the same scope does not mistake
+itself for a nested caller. `IsTransactionConflict` passes on the store
+provider's verdict that a failure was a conflict with a concurrent transaction,
+and keeps answering after the scope was disposed, which is when a retry asks.
+The shipped implementation is the shared transaction of `Bsft.Data`,
+[one transaction across several contexts](data.md#a-transaction-across-several-contexts);
+the mediator's transaction and retry behaviors read the seam from here, so neither
+references a persistence package, and it lives here for the same reason as the
+two contracts above.
+
+`AmbientTransactionMisuseException`, beside it and derived from
+`InvalidOperationException`, is what an implementation throws when the
+transaction is used in a way that fails the same way on every attempt: a failure
+inside the unit was caught and the work completed anyway, a second outermost unit
+was started beside a running one, or a store retries on its own. The retry
+behavior reads the type and does not retry it, unless the swallowed failure it
+carries as inner exception is one the store classifies as a conflict.
 
 ## The closure calculator
 
@@ -352,6 +389,93 @@ using (await pool.EnterAsync(ct))
 Two pools that share one `KeyedGate` never run two callers of the same key at once, whichever pool
 admitted them.
 
+## Background work per tenant
+
+`Bsft.Core.Tenancy` (since 2.2.1-preview.1) is the seam that lets the framework's background services work
+for each tenant of a host whose tenants live in databases of their own:
+
+| Type | Role |
+| --- | --- |
+| `IBackgroundTenantSource` | The host lists the tenants a pass runs for. |
+| `BackgroundTenant` | The ambient tenant of the pass (`Current`; `new BackgroundTenant(tenantId)` enters a tenant until it is disposed); `Bsft.Data`'s `TenantContext` takes it over, once when the context is created, while its scope has resolved no tenant of its own; a scope created outside a pass therefore stays without a tenant inside one, and never changes its tenant halfway. |
+| `BackgroundTenantPasses` | `PerTenant` and `CountPerTenantAsync` run a pass once per tenant, in turn, with `BackgroundTenant` set; one tenant's failure does not keep the others from running and is rethrown afterwards. |
+| `ITenantScopeFactory` / `ITenantScope` | A service scope with a tenant entered; `Bsft.Data`'s `AddBsftDataMultiTenancy` registers one. `CreateScopeAsync(tenantId, cancellationToken)` (since 2.2.1-preview.6) is for a host that can only bind a tenant's scope with I/O; its default calls `CreateScope`, so an implementation without it keeps working. |
+
+With an `IBackgroundTenantSource` registered, the outbox dispatcher and its audit counterpart, the inbox,
+audit-outbox and idempotency sweepers, the job dispatcher and the leased work queues run every pass once per
+tenant; `JobExecutor` and `WorkDispatcher` open a job's scope through `ITenantScopeFactory.CreateScopeAsync` when a
+factory is registered, with the run's or the item's token.
+Without a source nothing changes.
+
+Every one of these services that opens a scope inside a tenant's pass opens it through
+`ITenantScopeFactory.CreateScopeAsync` when the host registers a factory (since 2.2.1-preview.7; before, the audit
+outbox dispatcher, the audit-outbox, inbox and idempotency sweepers and the feature flag rule check at start opened a
+plain scope with `IServiceScopeFactory.CreateScope`), and falls back to a plain scope inside the `BackgroundTenant`
+when none is registered. A host whose `CreateScope` refuses because binding needs I/O is therefore never called
+synchronously by a background pass:
+
+| Service | Scopes of a tenant's pass |
+| --- | --- |
+| `AuditOutboxDispatcher` (`Bsft.Auditing.EFCore`) | The batch read, each row's dispatch, a failed attempt's record |
+| `AuditOutboxSweeper` (`Bsft.Auditing.EFCore`) | The sweep |
+| `InboxSweeper` (`Bsft.Messaging.EFCore`) | The sweep |
+| `IdempotencyRecordSweeper` (`Bsft.Idempotency.EFCore`) | The sweep |
+| `FeatureFlagStartupValidator` (`Bsft.FeatureFlags`) | A tenant's rule check, where the store keeps flags per tenant |
+| `WorkDispatcher` (`Bsft.Jobs`), `JobExecutor` (`Bsft.Scheduling`) | An item's or a job's scope (since 2.2.1-preview.6) |
+| `FeatureFlagSnapshotProvider` (`Bsft.FeatureFlags`) | A tenant's snapshot load (since 2.2.1-preview.6) |
+| `EFCoreOutboxStore` (`Bsft.Outbox.EFCore`), the integration-event outbox's store | Each lease, mark, abandon and dead-letter of the outbox dispatcher's drain |
+| `EFCoreJobStore` (`Bsft.Scheduling.EFCore`) | Each operation of the job dispatcher and executor (list, claim, settle, retry, enqueue, cancel, find) |
+| `EFCoreWorkQueue` (`Bsft.Jobs.EFCore`) | Each operation of the leased worker (claim, renew, settle, enqueue, cancel, find, counts) |
+
+The public services among them take the factory through an additional constructor
+(`..., IBackgroundTenantSource tenants, ITenantScopeFactory tenantScopes)`), which the container picks when both are
+registered; `EFCoreOutboxStore` takes it through `(scopeFactory, rows, tenantScopes)`, which `AddBsftMessagingEFCore`
+uses when a factory is registered, and the internal job store and work queue take it as an optional parameter. The
+stores ask the factory only while `BackgroundTenant.Current` is set, so a request or a caller outside a pass keeps its
+plain scope. A failed binding counts as that tenant's failure: the pass goes on with the next tenant and rethrows it
+afterwards, as for any other failure. Every scope of these passes, the tenant's and the plain one, is disposed
+asynchronously, so a scoped service that is only `IAsyncDisposable` (a leased data source) is released without the
+container's synchronous-dispose fault.
+
+What the seam does not cover yet, so that a slice building on it knows: `RecurringJobSeeder`,
+`StoredScheduleSeeder` and `IntegrationEventConsumerHost` run without a tenant, so in silo mode recurring jobs are
+not seeded into the tenants' databases and consumed integration events are handled outside any tenant. A host with
+a source also no longer runs a pass without a tenant, so a platform database beside the tenants' is not drained
+by these services. And each in-process outbox wake-up drains every tenant the source lists, one database after
+another, because the signal names no tenant: with many silos every burst of commits costs a pass over all of
+them.
+
+Inside a tenant's pass a few scopes are still opened plainly, without the factory:
+
+- The loopback bus (`InMemoryMessageBus`, `Bsft.Messaging`) and the inbox-guarded delivery (`InboxGuardedDelivery`)
+  open their handler scope with `CreateAsyncScope`. When the outbox drain delivers in-process, the store's lease is
+  bound but the handlers and the `IInboxStore` are not, so a host whose scopes bind only through the factory fails
+  each event until the row is dead-lettered.
+- `JobScheduleResolver` (`Bsft.Scheduling`) opens a synchronous `CreateScope()` in a tenant's dispatch pass to read
+  `IRecurringJob.Schedule`: the job is constructed unbound, a scoped service that is only `IAsyncDisposable` faults
+  the dispose, and the schedule is cached across tenants.
+- `AuditOutboxDispatcher` records a failed attempt in a second tenant scope while the row's scope is still open, so a
+  tenant holds two bindings at once for that moment. A host that allows only one binding per tenant at a time (a
+  semaphore of one) would wait there for ever.
+
+## Time-ordered ids
+
+`ITimeOrderedIdGenerator` (`Bsft.Core.Persistence`) hands out 64-bit ids a client makes before it writes the row,
+for a table without an identity column. `TimeOrderedIdGenerator` packs 41 bits of milliseconds since 2025-01-01
+(enough into 2094), 12 bits of node id and 10 bits of sequence, with the sign bit clear. Its one counter moves by
+compare-and-swap to the larger of "one more than last time" and "now with sequence zero", so values rise strictly
+under parallel calls, a clock that steps back does not move them back, and more than 1024 values in one millisecond
+carry into the next one.
+
+`TimeOrderedIdGenerator.ForNode(n, timeProvider)` returns one instance per node id, clock and process, so two
+containers in one process that share the registered `TimeProvider` share a counter; `ForRandomNode(timeProvider)` is
+the instance for a host that configured no node id, with one node id per clock counted up from a start drawn at random
+per process, so up to 4096 clocks per process differ and after that a node id repeats. The clock is the one the host
+registered, so a test that registers a fake clock drives the time field. Ids of processes with different node ids never
+collide.
+`Decompose(id)` splits an id back into instant, node id and sequence. The tenant-keyed framework tables take their ids
+from it ([data.md](data.md#tenant-keys)).
+
 ## Setup
 
 There is nothing to register. Reference the package and throw the exceptions:
@@ -370,6 +494,56 @@ public sealed class GetOrderHandler(IOrderDbContext db) : IQueryHandler<GetOrder
     }
 }
 ```
+
+## Addresses
+
+`EmailAddress`, `InternetDomain` and `EmailAddressCollisions` in the `Bsft.Core` root are the one place the framework decides what an e-mail address and a domain name are. Every path
+that stores, compares, looks up or delivers one goes through it: self-registration, the directory's login lookup, e-mail
+verification, password reset, invitations, the organization domain claims (`IVerifiedDomainLookup`, home-realm discovery) and
+the domains upstream connections report. No package canonicalizes on its own.
+
+**Where it lives.** `Bsft.Core` is the lowest package every user may reference: `Bsft.Auth.Credentials.Abstractions` (an
+`.Abstractions` package may take `Bsft.Core` only, section 1 of the package conventions), `Bsft.Auth.Oidc.Organization`,
+`Bsft.Organization.Domains` and `Bsft.Auth.Oidc.Connections` all reach it, and it adds no package reference: the UTS 46 tables
+are embedded text (about 130 KB) read on the first non-ASCII name, and Punycode is implemented in the package. The UTS 39
+confusables data (about 760 KB) is only needed where a domain grants rights, so it lives in `Bsft.Organization.Domains`
+(`DomainSkeleton`), which the connections package already references.
+
+| Type | Does |
+| --- | --- |
+| `InternetDomain.TryCanonicalizeDomain` | UTS 46 non-transitional processing to the lower-case A-label form; `ToUnicode` for display and skeletons. |
+| `EmailAddress.TryCanonicalize` / `TryFold` | The canonical address (ASCII local part exactly as entered, canonical domain); the case-insensitive key two spellings share. |
+| `EmailAddressCollisions.FindCollisions` | The report a host reads before it canonicalizes stored addresses: collisions, addresses that are not canonical, rewrites. |
+
+**Domain rule.** UTS 46 with `Transitional_Processing=false`, `CheckHyphens`, `CheckBidi`, `CheckJoiners`, `UseSTD3ASCIIRules` and
+`VerifyDnsLength`: the mapping table (case folding, full-width and compatibility characters, `U+3002`/`U+FF0E`/`U+FF61` as dots,
+ignored code points such as the soft hyphen), NFC, label validity (no leading or trailing hyphen, no `--` in positions 3 and 4,
+no leading mark, only valid or deviation code points, ASCII limited to letters, digits and hyphen), the joiner rules (ZWNJ/ZWJ
+only after a virama, ZWNJ also between joining letters), the RFC 5893 bidi rule for names with right-to-left text, A-labels of at
+most 63 octets and a name of at most 253. Beyond UTS 46: at least two labels, no trailing dot, a last label that is not all
+digits. A `xn--` label has to decode, be valid and encode back to itself, so one name has one spelling. Non-transitional means
+`faß.de` stays `xn--fa-hia.de` (not `fass.de`) and the final sigma and ZWJ/ZWNJ are kept where valid.
+
+**Deterministic on every platform.** `System.Globalization.IdnMapping` asks ICU on Linux and the operating system on Windows,
+which know different Unicode versions and differ at the edges, so one name could canonicalize differently on two hosts that share
+a database. The mapping, bidi, joining, virama and mark tables are generated from Unicode 18.0.0 (`tools/unicode-data/generate.py`
+pins the version and fails on any other) and embedded. Unicode normalization forms C and D come from
+the package too (`UnicodeNormalization`, UAX 15 over generated combining-class, decomposition and composition-exclusion tables), so
+nothing is asked of ICU, NLS or the globalization mode: the invariant mode, an ICU older than Unicode 18 and Windows give the same A-labels
+and skeletons, and `InternetDomainTests` runs under `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` as well. The test vectors in `InternetDomainTests` are literal values, not `IdnMapping` answers, and run on every platform CI runs.
+
+**Local part.** Strict ASCII dot-atom, at most 64 characters, as before; an internationalized local part (RFC 6531) is refused because
+delivering to it needs SMTPUTF8 on every hop.
+
+**What is stored.** The address as entered with the domain as its canonical A-label (`Ada@Müller.DE` is stored as
+`Ada@xn--mller-kva.de`); the local part keeps its case. Uniqueness and lookup are case-insensitive over the **fold**
+(`ADA@XN--MLLER-KVA.DE`, upper-cased invariantly), which `DirectoryEmail.Fold` returns for `DirectoryUser.NormalizedEmail`. Delivery uses the
+stored value.
+
+**Existing data.** Rows stored under an older rule can collide once canonicalized (an upper-cased domain next to a lower-cased one, an
+internationalized domain written once as Unicode and once as Punycode). `EmailAddressCollisions.FindCollisions(storedAddresses)` returns the groups
+that become one address (`Collisions`, nothing is merged), the addresses that are not canonical at all (`Rejected`) and the ones that need
+rewriting (`Rewrites`, `Stored` to `Canonical`); a host runs it in a migration's dry run or an import check and decides per group.
 
 ## See also
 

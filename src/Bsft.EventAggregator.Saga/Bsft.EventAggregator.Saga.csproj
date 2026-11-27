@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Bsft.Data.Contracts\Bsft.Data.Contracts.csproj" />
     <ProjectReference Include="..\Bsft.EventAggregator\Bsft.EventAggregator.csproj" />
     <ProjectReference Include="..\Bsft.Instrumentation\Bsft.Instrumentation.csproj" />
+    <ProjectReference Include="..\Bsft.Hosting.StartGates\Bsft.Hosting.StartGates.csproj" />
   </ItemGroup>
 
   <ItemGroup>

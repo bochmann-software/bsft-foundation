@@ -12,14 +12,24 @@ public class BsftResilienceMediatorOptionsValidatorTests
             .Validate(name: null, new BsftResilienceMediatorOptions()).Succeeded.Should().BeTrue();
     }
 
-    [Fact]
-    public void Validate_WithAnUnusableRetryCount_FailsNamingTheMember()
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    public void Validate_WithAnUnusableRetryCount_FailsNamingTheMember(int maxRetryAttempts)
     {
         var result = new BsftResilienceMediatorOptionsValidator()
-            .Validate(name: null, new BsftResilienceMediatorOptions { MaxRetryAttempts = -1 });
+            .Validate(name: null, new BsftResilienceMediatorOptions { MaxRetryAttempts = maxRetryAttempts });
 
         result.Failed.Should().BeTrue();
-        result.FailureMessage.Should().Contain(nameof(BsftResilienceMediatorOptions.MaxRetryAttempts));
+        result.FailureMessage.Should().Contain(nameof(BsftResilienceMediatorOptions.MaxRetryAttempts))
+            .And.Contain("at least 1");
+    }
+
+    [Fact]
+    public void Validate_WithASingleRetry_Succeeds()
+    {
+        new BsftResilienceMediatorOptionsValidator()
+            .Validate(name: null, new BsftResilienceMediatorOptions { MaxRetryAttempts = 1 }).Succeeded.Should().BeTrue();
     }
 
     [Fact]

@@ -28,6 +28,56 @@ public class OutboxDrainerTests
         _store.Processed.Should().Equal(1, 2);
     }
 
+    /// <summary>A stop between rows keeps the rest of the batch unstarted; the row in flight still gets its mark.</summary>
+    [Fact]
+    public async Task A_pass_told_to_stop_during_a_row_finishes_that_row_and_starts_no_other()
+    {
+        using var stop = new CancellationTokenSource();
+        Stage(1, "first");
+        Stage(2, "second");
+        Stage(3, "third");
+        _sideEffect.Outcomes["first"] = () => stop.CancelAsync();
+
+        var applied = await Drainer().DrainOnceAsync(() => !stop.IsCancellationRequested);
+
+        applied.Should().Be(1);
+        _sideEffect.Applied.Should().Equal("first");
+        _store.Processed.Should().Equal(1);
+        _store.Abandoned.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_pass_without_a_start_decision_is_refused()
+    {
+        var act = () => Drainer().DrainOnceAsync(null!);
+
+        await act.Should().ThrowAsync<ArgumentNullException>().WithParameterName("mayStartRow");
+    }
+
+    [Fact]
+    public async Task A_pass_told_to_stop_before_it_starts_leases_nothing()
+    {
+        Stage(1, "first");
+
+        var applied = await Drainer().DrainOnceAsync(() => false);
+
+        applied.Should().Be(0);
+        _store.Leases.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_pass_told_to_stop_after_the_lease_applies_no_row()
+    {
+        using var stop = new CancellationTokenSource();
+        Stage(1, "first");
+        _store.OnLease = () => stop.Cancel();
+
+        var applied = await Drainer().DrainOnceAsync(() => !stop.IsCancellationRequested);
+
+        applied.Should().Be(0);
+        _sideEffect.Applied.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task A_pass_over_an_empty_outbox_applies_nothing()
     {

@@ -12,6 +12,7 @@ internal sealed class SagaStepTelemetryScope : ISagaStepTelemetryScope
     private const string SkippedOutcome = "skipped";
 
     private readonly SagaTelemetry _telemetry;
+    private readonly TimeProvider _timeProvider;
     private readonly Activity? _activity;
     private readonly string _sagaType;
     private readonly long _startTimestamp;
@@ -22,14 +23,16 @@ internal sealed class SagaStepTelemetryScope : ISagaStepTelemetryScope
     /// Initializes a new instance of the <see cref="SagaStepTelemetryScope"/> class.
     /// </summary>
     /// <param name="telemetry">The owning telemetry that records the measurement.</param>
+    /// <param name="timeProvider">The clock the step's duration is measured on.</param>
     /// <param name="activity">The step activity, or <see langword="null"/> when not sampled.</param>
     /// <param name="sagaType">The saga type identifier used as the metric tag.</param>
-    public SagaStepTelemetryScope(SagaTelemetry telemetry, Activity? activity, string sagaType)
+    public SagaStepTelemetryScope(SagaTelemetry telemetry, TimeProvider timeProvider, Activity? activity, string sagaType)
     {
         _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _activity = activity;
         _sagaType = sagaType ?? throw new ArgumentNullException(nameof(sagaType));
-        _startTimestamp = Stopwatch.GetTimestamp();
+        _startTimestamp = _timeProvider.GetTimestamp();
     }
 
     /// <inheritdoc />
@@ -47,7 +50,7 @@ internal sealed class SagaStepTelemetryScope : ISagaStepTelemetryScope
 
         _disposed = true;
 
-        var elapsed = Stopwatch.GetElapsedTime(_startTimestamp);
+        var elapsed = _timeProvider.GetElapsedTime(_startTimestamp);
         _telemetry.RecordStep(_sagaType, _outcome, elapsed.TotalSeconds);
         _activity?.Dispose();
     }

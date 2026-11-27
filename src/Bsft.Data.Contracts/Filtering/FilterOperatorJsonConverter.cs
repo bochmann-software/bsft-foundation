@@ -22,7 +22,8 @@ public sealed class FilterOperatorJsonConverter : JsonConverter<FilterOperator>
         ["!startsWith"] = FilterOperator.NotStartsWith,
         ["endsWith"] = FilterOperator.EndsWith,
         ["!endsWith"] = FilterOperator.NotEndsWith,
-        ["pr"] = FilterOperator.Present
+        ["pr"] = FilterOperator.Present,
+        ["in"] = FilterOperator.In
     };
 
     private static readonly Dictionary<FilterOperator, string> _valueToName = new()
@@ -39,7 +40,8 @@ public sealed class FilterOperatorJsonConverter : JsonConverter<FilterOperator>
         [FilterOperator.NotStartsWith] = "!startsWith",
         [FilterOperator.EndsWith] = "endsWith",
         [FilterOperator.NotEndsWith] = "!endsWith",
-        [FilterOperator.Present] = "pr"
+        [FilterOperator.Present] = "pr",
+        [FilterOperator.In] = "in"
     };
 
     /// <inheritdoc />

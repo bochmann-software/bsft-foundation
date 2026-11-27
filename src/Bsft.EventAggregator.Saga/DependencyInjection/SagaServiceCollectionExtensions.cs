@@ -3,6 +3,7 @@ using Bsft.EventAggregator.Saga.Diagnostics;
 using Bsft.EventAggregator.Saga.Execution;
 using Bsft.EventAggregator.Saga.Persistence;
 using Bsft.EventAggregator.Saga.Timeouts;
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Bsft.Instrumentation.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -119,7 +120,7 @@ public static class SagaServiceCollectionExtensions
         // application would have fired rather than a second dispatcher over the same stores.
         services.AddSingleton<SagaTimeoutDispatcher>();
         services.AddSingleton<ISagaTimeoutDrainer>(sp => sp.GetRequiredService<SagaTimeoutDispatcher>());
-        services.AddHostedService(sp => sp.GetRequiredService<SagaTimeoutDispatcher>());
+        services.AddBsftGatedHostedService<SagaTimeoutDispatcher>();
 
         // Telemetry emits a no-op until an observability backend attaches a listener/exporter; the
         // "Bsft.Saga" source is advertised for discovery via the vendor-neutral instrumentation layer.

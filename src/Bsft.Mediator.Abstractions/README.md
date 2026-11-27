@@ -48,9 +48,19 @@ behavior reads it instead of keeping a reflection cache of its own. `Bsft.Mediat
 implementation.
 `ICorrelationIdAccessor` — supplies the id the logging and tracing behaviors stamp onto a dispatch,
 without this package depending on the correlation family.
+`IRescopingPipelineBehavior<TRequest, TResponse>` / `IPipelineContinuation<TResponse>` /
+`PipelineAttempt<TResponse>` — a behavior that runs the rest of the pipeline in the request's scope or in
+a fresh one, the way the retry behavior runs each further attempt over a shared transaction.
+`IRequestScopeSeed` — copies the request scope's state (tenant, user) into such a fresh scope.
+`IRequestNesting` — the scope's marks of an outer request that is retried or holds a transaction open;
+`NullRequestNesting` is the instance for a behavior built without a scope.
+`IMediatorTransactionPolicy` — whether the mediator applies the transaction to every command.
+`IRequestMetadata.IsCommand` — whether a request is a command; implementations written before it
+existed get a default that reflects on `RequestType`.
 
-`TransactionalAttribute` on a handler is what `TransactionBehavior` looks for; a request whose handler
-does not carry it is dispatched outside a transaction.
+`TransactionalAttribute` on a handler is what `TransactionBehavior` looks for. A request whose handler
+does not carry it is dispatched outside a transaction, unless the host applies the transaction to every
+command (`ApplyTransactionToAllCommands()`) and the request is a command.
 
 ## Documentation
 

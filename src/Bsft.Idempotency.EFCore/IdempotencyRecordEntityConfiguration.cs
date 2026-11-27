@@ -1,3 +1,4 @@
+using Bsft.Data.MultiTenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -28,7 +29,18 @@ public sealed class IdempotencyRecordEntityConfiguration : IEntityTypeConfigurat
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.ToTable("IdempotencyRecords");
-        builder.HasKey(entity => entity.Id);
+
+        // Under UseTenantKeys the record carries its tenant, which leads the key and both indexes, and
+        // its id is made by the client; without it the table keeps its identity key and no tenant column.
+        var isTenantKeyed = builder.IsTenantKeyed();
+
+        if (isTenantKeyed)
+            builder.HasTenantKey(entity => entity.TenantId, entity => entity.Id);
+        else
+        {
+            builder.HasKey(entity => entity.Id);
+            builder.Ignore(entity => entity.TenantId);
+        }
 
         // A length is mandatory on the indexed columns, not cosmetic: an unbounded string maps to
         // nvarchar(max) on SQL Server, which is rejected outright as an index key column.
@@ -50,11 +62,17 @@ public sealed class IdempotencyRecordEntityConfiguration : IEntityTypeConfigurat
         // The scope leads, so every query the store makes — all of them equalities on both columns —
         // rides the index, and one tenant's keys are physically adjacent rather than interleaved
         // with another's.
-        builder.HasIndex(entity => new { entity.Scope, entity.Key }).IsUnique();
+        if (isTenantKeyed)
+            builder.HasIndex(entity => new { entity.TenantId, entity.Scope, entity.Key }).IsUnique();
+        else
+            builder.HasIndex(entity => new { entity.Scope, entity.Key }).IsUnique();
 
         // What the pruner sweeps on, and it is one column because the entity keeps one expiry: a
         // reservation still inside its lease is not older than now and is therefore never pruned,
         // which is the property that keeps a sweep from freeing a key a request is still using.
-        builder.HasIndex(entity => entity.ExpiresAt);
+        if (isTenantKeyed)
+            builder.HasIndex(entity => new { entity.TenantId, entity.ExpiresAt });
+        else
+            builder.HasIndex(entity => entity.ExpiresAt);
     }
 }

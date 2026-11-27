@@ -66,6 +66,7 @@ public sealed class SqliteFullTextRebuildTests : IDisposable
         var executor = new SearchExecutor<Candidate, CandidateDto>(
             new CompiledSearchConfiguration<Candidate, CandidateDto>(new CandidateQueryConfiguration()),
             new NullTelemetry(),
+            TimeProvider.System,
             new SqliteSearchProvider(Options.Create(SqliteSearchProviderTests.SearchOptions())),
             new FixedScopeProvider(new SearchScopeState("t1", [_berlin])));
 

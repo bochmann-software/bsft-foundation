@@ -9,7 +9,7 @@ delayed job survives a restart and several instances coordinate their leases thr
 dotnet add package Bsft.Scheduling.EFCore
 ```
 
-Requires `Bsft.Scheduling` (pulled transitively), `Microsoft.EntityFrameworkCore` and
+Requires `Bsft.Scheduling` and `Bsft.Retention` (both pulled transitively), `Microsoft.EntityFrameworkCore` and
 `Microsoft.EntityFrameworkCore.Relational`. The database provider and the `DbContext` itself belong to
 the host; this package only supplies the entity, its configuration and the store.
 
@@ -40,12 +40,21 @@ from `IJobDbContext`: a host that already implements it for delayed and recurrin
 a new required member the moment it adopts the catalog, and a host that only wants the job store carries
 no table it never queries.
 
+Settled runs are kept until a host asks otherwise. To prune them, add the retention pass and set a window:
+
+```csharp
+services.AddBsftJobRunEFCoreRetention();
+// Bsft:Scheduling:JobRunRetention = "30.00:00:00", Bsft:Scheduling:JobRunRetentionKeepLatest = 5
+```
+
 ## Configure
 
 | Option | Default | Effect |
 | --- | --- | --- |
 | `JobRunEntityConfiguration.DefaultPendingFilter` | `[IsRecurring] = 1 AND [Status] = 0` | The SQL predicate behind the unique index that allows at most one *pending* occurrence per recurring job. Written for SQL Server and SQLite, whose identifier quoting matches. |
 | `new JobRunEntityConfiguration(pendingFilter)` | the default filter | A provider whose quoting differs supplies its own — PostgreSQL needs `"IsRecurring" = true AND "Status" = 0`. Passing `null` leaves a plain index: no filter and no uniqueness, and with the uniqueness goes the guarantee that two instances seeding at the same moment cannot both create an occurrence of the same recurring job. |
+| `BsftSchedulingOptions.JobRunRetention` | unset | How long a completed, failed or skipped run is kept, once `AddBsftJobRunEFCoreRetention()` has been called. Unset means `JobRuns` keeps every run. Pending and running runs are never deleted. |
+| `BsftSchedulingOptions.JobRunRetentionKeepLatest` | `0` | How many of each job's latest settled runs are spared whatever their age. |
 
 This package declares no options type of its own and therefore no configuration section: everything an
 operator decides lives in `BsftSchedulingOptions`, and everything the schema decides is a constructor

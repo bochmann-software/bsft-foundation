@@ -40,10 +40,46 @@ instead — that is a separate extension family and does not touch the rest of t
 | `BsftLoggingOptions.LogDirectory` | `logs` | Directory the log files are written to; a relative path is resolved from the process working directory. |
 | `BsftLoggingOptions.MaxFileSizeMb` | `10` | Size at which the current file rolls to `app-{date}_001.log`. Capped at 1024. |
 | `BsftLoggingOptions.RetainDays` | `30` | How many days of files are kept; older ones are deleted at startup and on each day rollover. Between 1 and 3650. |
+| `BsftLoggingOptions.MaxRetainedFiles` | unlimited | Most log files kept, the file being written included. `null` or `0` keeps every file. Must not be negative. |
+| `BsftLoggingOptions.MaxTotalSizeMb` | unlimited | Most combined size of the log files in MB, the file being written included. `null` or `0` sets no limit. Must not be negative, and when set must be at least twice `MaxFileSizeMb` (one rolled file plus the active one); the limit keeps roughly `MaxTotalSizeMb / MaxFileSizeMb - 1` full rolled files. |
 | `BsftLoggingOptions.EnableJsonFormat` | `false` | One JSON object per line instead of structured text lines. |
 | `BsftLoggingOptions.MinimumLevel` | `Information` | Minimum level for the file sink. It lowers the pipeline floor when it asks for more than `Information`, and never raises it. |
 | `BsftLoggingOptions.LogReaderPollInterval` | `250 ms` | Poll interval used by `ILogFileReader.TailAsync`. Must be positive. |
 | `BsftLoggingOptions.MaxEntryBytes` | `1 MiB` | Maximum UTF-8 bytes retained for one physical line or multiline entry. Oversized entries set `IsTruncated`. Must be positive. |
+
+Cleanup runs at start-up, when a file rolls and when the day turns over. It deletes the oldest files first until
+`RetainDays`, `MaxRetainedFiles` and `MaxTotalSizeMb` all hold (for example `MaxRetainedFiles = 10` with `MaxFileSizeMb = 10`
+caps the directory at about 100 MB). "Oldest" is decided by the date and roll index in the file name, not by the last-write
+time, so a copy or backup that touches a file does not change the order. Files whose name does not follow
+`app-yyyy-MM-dd[_NNN].log` are not the logger's and are never deleted. The file being written is never deleted. A file that
+is locked or already gone is skipped and reported on `Console.Error`; cleanup never throws into the logging path.
+`MaxRetainedFiles` and `MaxTotalSizeMb` assume one writer per log directory: a provider that deletes a file another provider or
+process is still appending to loses that data without an error on Linux. Hosts that share a directory should use `RetainDays` only.
+
+A host that keeps its own console output and only wants the file sink passes the section to the
+provider registration. A missing or empty section adds nothing, and `EnableFileLogging = false` adds
+nothing either; the options are validated on start:
+
+```csharp
+builder.Logging.AddBsftFileLogger(builder.Configuration.GetSection(BsftLoggingOptions.SectionName));
+```
+
+```json
+{
+  "Bsft": {
+    "Logging": {
+      "EnableFileLogging": true,
+      "LogDirectory": "logs",
+      "MaxFileSizeMb": 10,
+      "RetainDays": 30,
+      "MaxRetainedFiles": 10,
+      "MaxTotalSizeMb": 100,
+      "EnableJsonFormat": false,
+      "MinimumLevel": "Information"
+    }
+  }
+}
+```
 
 Validation: while file logging is on, the directory must be named, the file size must be between 1
 and 1024 MB and the retention must be between one day and ten years. A failure names the member and the offending

@@ -104,6 +104,54 @@ public class StoredScheduleSeederTests
     }
 
     [Fact]
+    public async Task ADueInstantAheadOfTheClockIsTheAnchorOfTheNextOccurrence()
+    {
+        using var provider = BuildScopeProvider();
+        var dueAt = _now.AddMinutes(2);
+        var schedule = new StoredSchedule
+        {
+            Id = 7,
+            TenantId = "tenant-a",
+            JobKey = "report",
+            Schedule = JobSchedule.Every(TimeSpan.FromMinutes(5)),
+            Payload = "{\"orderId\":2}",
+            Enabled = true,
+            NextRunAt = dueAt,
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+
+        // A store that reports the schedule as due before the clock reaches its due instant. The seeder
+        // must anchor the next occurrence on that due instant, not on the clock.
+        var store = Substitute.For<IStoredScheduleStore>();
+        store.ListDueAsync(Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<StoredSchedule>>([schedule]));
+        store.AdvanceOrNullAsync(Arg.Any<StoredSchedule>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<StoredSchedule?>(schedule));
+
+        using var cts = new CancellationTokenSource();
+        _jobScheduler
+            .EnqueueAtAsync(Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                cts.Cancel();
+                return Task.FromResult(1L);
+            });
+
+        var seeder = new StoredScheduleSeeder(
+            store,
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            _time,
+            Options.Create(_options),
+            NullLogger<StoredScheduleSeeder>.Instance);
+
+        await seeder.SeedPeriodicallyAsync(cts.Token);
+
+        await store.Received(1).AdvanceOrNullAsync(schedule, _now, dueAt.AddMinutes(5), Arg.Any<CancellationToken>());
+        await _jobScheduler.Received(1).EnqueueAtAsync("report", dueAt, "{\"orderId\":2}", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task NoDueScheduleMeansNothingIsEnqueued()
     {
         using var provider = BuildScopeProvider();
@@ -250,13 +298,21 @@ public class StoredScheduleSeederTests
             UpdatedAt = _now,
         });
         var seeder = CreateSeeder(provider);
+        var enqueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _jobScheduler
+            .EnqueueAtAsync(Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                enqueued.TrySetResult();
+                return Task.FromResult(1L);
+            });
 
         await seeder.StartAsync(CancellationToken.None);
         // Since Microsoft.Extensions.Hosting 10, StartAsync runs the whole of ExecuteAsync on the
         // thread pool, so a stop right after the start can come before the first seeding. The test
         // waits for the due schedule to be enqueued rather than relying on the synchronous start of
         // earlier versions.
-        SpinWait.SpinUntil(() => _jobScheduler.ReceivedCalls().Any(), TimeSpan.FromSeconds(10)).Should().BeTrue();
+        await enqueued.Task.WaitAsync(TimeSpan.FromSeconds(30));
         await seeder.StopAsync(CancellationToken.None);
 
         seeder.Dispose();

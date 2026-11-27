@@ -1,3 +1,4 @@
+using Bsft.Data.MultiTenancy;
 using Bsft.Messaging.Inbox;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -30,6 +31,7 @@ internal sealed class EFCoreInboxStore : IInboxStore
 {
     private readonly IInboxDbContext _db;
     private readonly ILogger<EFCoreInboxStore> _logger;
+    private readonly ITenantContext? _tenantContext;
     private InboxMessageEntity? _claim;
 
     /// <summary>
@@ -37,9 +39,14 @@ internal sealed class EFCoreInboxStore : IInboxStore
     /// </summary>
     /// <param name="db">The application's DbContext, scoped to this delivery.</param>
     /// <param name="logger">Logger used to report a claim that had to be deleted rather than detached.</param>
-    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
-    public EFCoreInboxStore(IInboxDbContext db, ILogger<EFCoreInboxStore> logger)
+    /// <param name="tenantContext">
+    /// The delivery's tenant, which a tenant-keyed table (<c>UseTenantKeys</c>) is read and written
+    /// under; without one the tenant of the running background pass is used.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument but <paramref name="tenantContext"/> is null.</exception>
+    public EFCoreInboxStore(IInboxDbContext db, ILogger<EFCoreInboxStore> logger, ITenantContext? tenantContext = null)
     {
+        _tenantContext = tenantContext;
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -58,7 +65,7 @@ internal sealed class EFCoreInboxStore : IInboxStore
         // AsNoTracking because nothing is loaded to be changed: an existing record is only ever read
         // to be counted, and tracking it would put a row this delivery must not touch into the same
         // change tracker the handlers are about to save.
-        var alreadyProcessed = await _db.InboxMessages
+        var alreadyProcessed = await Records()
             .AsNoTracking()
             .AnyAsync(e => e.EventId == eventId && e.Consumer == consumer, cancellationToken)
             .ConfigureAwait(false);
@@ -72,6 +79,8 @@ internal sealed class EFCoreInboxStore : IInboxStore
         // the duplicate it has become.
         _claim = new InboxMessageEntity
         {
+            // Stored only under tenant keys, where Records() has already refused a scope without one.
+            TenantId = _tenantContext.FindCurrentTenantId(),
             EventId = eventId,
             Consumer = consumer,
             EventName = message.EventName,
@@ -152,7 +161,7 @@ internal sealed class EFCoreInboxStore : IInboxStore
             // (Consumer, EventId) means at most one row exists for this pair, and this delivery is what
             // wrote it: any concurrent delivery of the same event to the same consumer would have had
             // its own commit refused by that index rather than replacing this row.
-            var deleted = await _db.InboxMessages
+            var deleted = await Records()
                 .Where(e => e.EventId == eventId && e.Consumer == consumer)
                 .ExecuteDeleteAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -177,5 +186,21 @@ internal sealed class EFCoreInboxStore : IInboxStore
                 eventId,
                 consumer);
         }
+    }
+
+    /// <summary>
+    /// The inbox records this delivery may see: the whole table, or under tenant keys the current
+    /// tenant's records, so every statement carries the leading half of the key.
+    /// </summary>
+    /// <returns>The query.</returns>
+    /// <exception cref="InvalidOperationException">Thrown under tenant keys when the scope has no tenant.</exception>
+    private IQueryable<InboxMessageEntity> Records()
+    {
+        if (!_db.InboxMessages.IsTenantKeyed())
+            return _db.InboxMessages;
+
+        var tenantId = _tenantContext.GetCurrentTenantId("InboxMessages");
+
+        return _db.InboxMessages.Where(entity => entity.TenantId == tenantId);
     }
 }

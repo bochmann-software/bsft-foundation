@@ -31,7 +31,7 @@ public class RetryBehaviorTests
     {
         var behavior = new RetryBehavior<RetryableRequest, string>(ProviderFrom(FastOptions()));
 
-        var act = () => behavior.HandleAsync(new RetryableRequest(), null!);
+        var act = () => behavior.HandleAsync(new RetryableRequest(), (Func<Task<string>>)null!);
 
         await act.Should().ThrowAsync<ArgumentNullException>();
     }

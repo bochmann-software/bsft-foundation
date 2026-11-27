@@ -430,7 +430,7 @@ export function runNamingChecks(repo, report) {
         if (p.kind === 'src' && t.public) {
           const key = `${t.name}\`${arity(t)}`;
           if (!publicByName.has(key)) publicByName.set(key, []);
-          publicByName.get(key).push({ path: f.path, namespace: t.namespace });
+          publicByName.get(key).push({ path: f.path, namespace: t.namespace, hidden: t.hidden });
         }
       }
 
@@ -466,7 +466,10 @@ export function runNamingChecks(repo, report) {
   // --- N2.5: public types of src/ with the same name and arity in two namespaces ------------------
   for (const [key, declarations] of publicByName) {
     const namespaces = [...new Set(declarations.map((d) => d.namespace))];
-    if (namespaces.length > 1) {
+    // A type that moved keeps its old name, hidden from IntelliSense, so binaries compiled against it still bind
+    // (a type forward cannot move a type to another namespace). One visible declaration is the name.
+    const visible = new Set(declarations.filter((d) => !d.hidden).map((d) => d.namespace));
+    if (namespaces.length > 1 && visible.size !== 1) {
       report('name-duplicate', declarations[0].path, `public type ${key.replace(/`0$/, '')} is declared in ${namespaces.length} namespaces: ${namespaces.join(', ')}.`);
     }
   }

@@ -1,4 +1,7 @@
+using IStartupValidator = Bsft.Core.IStartupValidator;
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Bsft.Messaging.EFCore.Outbox;
+using Bsft.Outbox.Postgres;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -89,12 +92,30 @@ public static class PostgresServiceCollectionExtensions
         // The notifier is stateless and takes the context it writes through as an argument, so it is
         // shared; the interceptor is scoped because that is the lifetime a DbContext resolves its
         // interceptors at.
-        services.TryAddSingleton<IOutboxNotifier, PostgresOutboxNotifier>();
+        // Both wake-ups are registered and the options pick one when the first save or the worker resolves
+        // it, so the choice can come from configuration bound after this call.
+        services.TryAddSingleton<IPostgresListenSession, PostgresListenSession>();
+        services.TryAddSingleton<IPostgresListenLoop, PostgresListenLoop>();
+        services.TryAddSingleton<PostgresOutboxNotifier>();
+        services.TryAddSingleton<PostgresOutboxNotificationChannel<TContext>>();
+        services.TryAddSingleton<InProcessOutboxWake>();
+        services.TryAddSingleton<IOutboxNotifier>(provider => IsInProcessWake(provider)
+            ? provider.GetRequiredService<InProcessOutboxWake>()
+            : provider.GetRequiredService<PostgresOutboxNotifier>());
         services.TryAddScoped<OutboxNotifyInterceptor>();
 
-        services.TryAddSingleton<IOutboxNotificationChannel, PostgresOutboxNotificationChannel<TContext>>();
-        services.AddHostedService<OutboxNotificationWorker>();
+        services.TryAddSingleton<IOutboxNotificationChannel>(provider => IsInProcessWake(provider)
+            ? provider.GetRequiredService<InProcessOutboxWake>()
+            : provider.GetRequiredService<PostgresOutboxNotificationChannel<TContext>>());
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddBsftGatedHostedService<OutboxNotificationWorker>();
+
+        // A host working per tenant that still listens on one database is told so at start-up.
+        services.TryAddEnumerable(ServiceDescriptor.Transient<IStartupValidator, OutboxWakeStartupValidator>());
 
         return services;
     }
+
+    private static bool IsInProcessWake(IServiceProvider provider) =>
+        provider.GetRequiredService<IOptions<BsftMessagingPostgresOptions>>().Value.IsInProcessWake;
 }

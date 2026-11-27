@@ -2,6 +2,7 @@ using Bsft.Messaging.Publishing;
 using Bsft.Messaging.RabbitMQ.Publishing;
 using Bsft.Messaging.RabbitMQ.Tests.Fakes;
 using Bsft.Messaging.RabbitMQ.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using RabbitMQ.Client.Exceptions;
@@ -16,6 +17,9 @@ public class RabbitMQMessageBusTests
     private readonly FakeRabbitMQPublishChannelProvider _channelProvider = new();
     private readonly BsftRabbitMQOptions _options = TestOptions.Valid();
 
+    // The clock the confirm window runs on. Nothing advances it unless a test means the window to close.
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     [Fact]
     public void A_null_dependency_is_rejected()
     {
@@ -24,16 +28,18 @@ public class RabbitMQMessageBusTests
         var mapper = new RabbitMQMessageMapper(settings);
         var logger = NullLogger<RabbitMQMessageBus>.Instance;
 
-        var withoutProvider = () => new RabbitMQMessageBus(null!, mapper, topology, settings, logger);
-        var withoutMapper = () => new RabbitMQMessageBus(_channelProvider, null!, topology, settings, logger);
-        var withoutTopology = () => new RabbitMQMessageBus(_channelProvider, mapper, null!, settings, logger);
-        var withoutSettings = () => new RabbitMQMessageBus(_channelProvider, mapper, topology, null!, logger);
-        var withoutLogger = () => new RabbitMQMessageBus(_channelProvider, mapper, topology, settings, null!);
+        var withoutProvider = () => new RabbitMQMessageBus(null!, mapper, topology, settings, _clock, logger);
+        var withoutMapper = () => new RabbitMQMessageBus(_channelProvider, null!, topology, settings, _clock, logger);
+        var withoutTopology = () => new RabbitMQMessageBus(_channelProvider, mapper, null!, settings, _clock, logger);
+        var withoutSettings = () => new RabbitMQMessageBus(_channelProvider, mapper, topology, null!, _clock, logger);
+        var withoutClock = () => new RabbitMQMessageBus(_channelProvider, mapper, topology, settings, null!, logger);
+        var withoutLogger = () => new RabbitMQMessageBus(_channelProvider, mapper, topology, settings, _clock, null!);
 
         withoutProvider.Should().Throw<ArgumentNullException>();
         withoutMapper.Should().Throw<ArgumentNullException>();
         withoutTopology.Should().Throw<ArgumentNullException>();
         withoutSettings.Should().Throw<ArgumentNullException>();
+        withoutClock.Should().Throw<ArgumentNullException>();
         withoutLogger.Should().Throw<ArgumentNullException>();
     }
 
@@ -98,12 +104,22 @@ public class RabbitMQMessageBusTests
     [Fact]
     public async Task A_confirmation_that_never_arrives_becomes_a_publish_failure()
     {
-        _options.PublisherConfirmTimeout = TimeSpan.FromMilliseconds(20);
+        // The window runs on the injected clock: it is still open a tick before the timeout and closes
+        // when the clock reaches it.
+        var timeout = TimeSpan.FromSeconds(5);
+        _options.PublisherConfirmTimeout = timeout;
         _channelProvider.Channel.PublishBehaviour = ct => Task.Delay(Timeout.Infinite, ct);
 
-        var publish = () => Bus().PublishAsync(Message());
+        var publish = Bus().PublishAsync(Message());
 
-        await publish.Should().ThrowAsync<MessagePublishException>()
+        await _clock.WaitForTimerAsync(timeout);
+        _clock.Advance(timeout - TimeSpan.FromTicks(1));
+        publish.IsCompleted.Should().BeFalse();
+
+        _clock.Advance(TimeSpan.FromTicks(1));
+        var failed = async () => await publish.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await failed.Should().ThrowAsync<MessagePublishException>()
             .WithMessage("*did not confirm it within*");
     }
 
@@ -205,6 +221,7 @@ public class RabbitMQMessageBusTests
             new RabbitMQMessageMapper(settings),
             new RabbitMQTopology(_options),
             settings,
+            _clock,
             NullLogger<RabbitMQMessageBus>.Instance);
     }
 

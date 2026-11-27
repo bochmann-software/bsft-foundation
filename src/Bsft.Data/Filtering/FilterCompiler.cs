@@ -1,7 +1,5 @@
-using Bsft.Core;
 using Bsft.Data.Contracts.Filtering;
 using System.Linq.Expressions;
-using System.Reflection;
 using System.Text.Json;
 
 namespace Bsft.Data.Filtering;
@@ -11,12 +9,6 @@ namespace Bsft.Data.Filtering;
 /// </summary>
 public static class FilterCompiler
 {
-    private static readonly MethodInfo ToLowerMethod = typeof(string).GetMethod("ToLower", Type.EmptyTypes)!;
-
-    private static readonly PropertyInfo ValueProperty = typeof(ValueCarrier).GetProperty(nameof(ValueCarrier.Value))!;
-
-    private static readonly ConstantExpression NullString = Expression.Constant(null, typeof(string));
-
     /// <summary>
     /// Compiles the given filter node into a strongly-typed predicate expression.
     /// </summary>
@@ -39,6 +31,10 @@ public static class FilterCompiler
             throw new ArgumentNullException(nameof(node));
         if (fieldMap is null)
             throw new ArgumentNullException(nameof(fieldMap));
+
+        // The size of the in sets is checked over the whole tree first: the total is a property of the
+        // filter, not of one node, and nothing is built for a filter that is refused anyway.
+        FilterInValues.EnsureWithinLimits(node, fieldMap.MaxInValuesPerSet, fieldMap.MaxInValuesPerFilter);
 
         var parameter = Expression.Parameter(typeof(T), "x");
         var body = BuildExpression(node, parameter, fieldMap, stringMatch);
@@ -63,16 +59,22 @@ public static class FilterCompiler
         // (which compares against a value it does not have) is a malformed request. Reject it as a 400
         // here rather than let it fall through to the value-comparison switch as an unhandled 500.
         if (node.Op == FilterOperator.Present)
-            throw PresenceAsComparison(node.Field);
+            throw FilterErrors.PresenceAsComparison(node.Field);
+
+        if (fieldMap.TryResolveDynamic(node.Field, out var dynamicField))
+            return DynamicFieldCompiler.Compare(node, dynamicField ?? throw FilterErrors.UnknownField(node.Field), parameter);
 
         var mapping = fieldMap.GetField(node.Field, node.Op);
         var memberExpression = EntityMemberBinder.Bind(mapping.EntityExpression, parameter);
 
+        if (node.Op == FilterOperator.In)
+            return FilterSetCompiler.In(node, memberExpression, stringMatch);
+
         // A string operator against a non-string field is a client mistake, not an internal fault:
         // reject it as a ValidationException (400 keyed on `filter`) before the expression builder is
         // asked to coalesce a non-string member into a string, which would throw as an unhandled 500.
-        if (IsStringOperation(node.Op) && memberExpression.Type != typeof(string))
-            throw StringOperatorOnNonStringField(node.Op, node.Field);
+        if (FilterStringCompiler.IsStringOperation(node.Op) && memberExpression.Type != typeof(string))
+            throw FilterErrors.StringOperatorOnNonStringField(node.Op, node.Field);
 
         var isNullValue = node.Value.ValueKind == JsonValueKind.Null;
 
@@ -84,7 +86,7 @@ public static class FilterCompiler
         if (isNullValue && memberExpression.Type.IsValueType
             && Nullable.GetUnderlyingType(memberExpression.Type) is null)
         {
-            throw NullValueOnNonNullableField(node.Field);
+            throw FilterErrors.NullValueOnNonNullableField(node.Field);
         }
 
         // Null is not a value to compare against, it is the absence of one, so only equality says
@@ -92,7 +94,7 @@ public static class FilterCompiler
         // absent: `co` against a null value lowers to Contains("") and matches every row, and an
         // ordering operator lifts to a comparison that is false for every row including the null ones.
         if (isNullValue && node.Op is not (FilterOperator.Eq or FilterOperator.Neq))
-            throw NullWithNonEqualityOperator(node.Op, node.Field);
+            throw FilterErrors.NullWithNonEqualityOperator(node.Op, node.Field);
 
         // Compare against the member's own null rather than going through the value path. The value
         // path exists to parameterize a value and, in LowerInvariant mode, to fold both operands to
@@ -109,10 +111,10 @@ public static class FilterCompiler
         // The value takes the member's own type, Nullable<T> included: a comparison needs both operands
         // of one type, and lifting only the member left `int? == int`, which Expression refuses.
         var value = DeserializeValue(node.Value, memberExpression.Type);
-        var valueExpression = BuildValueAccessor(value, memberExpression.Type);
+        var valueExpression = FilterOperands.Parameterize(value, memberExpression.Type);
 
-        if (IsStringOperation(node.Op))
-            return BuildStringComparison(node.Op, memberExpression, valueExpression, stringMatch);
+        if (FilterStringCompiler.IsStringOperation(node.Op))
+            return FilterStringCompiler.Compare(node.Op, memberExpression, valueExpression, stringMatch);
 
         return BuildValueComparison(node.Op, memberExpression, valueExpression, stringMatch);
     }
@@ -121,6 +123,9 @@ public static class FilterCompiler
     {
         // Presence runs through the same per-field whitelist as every other operator: a field must
         // declare AllowFilter(FilterOperator.Present) for a presence test to resolve at all.
+        if (fieldMap.TryResolveDynamic(node.Field, out var dynamicField))
+            return DynamicFieldCompiler.Present(dynamicField ?? throw FilterErrors.UnknownField(node.Field), parameter);
+
         var mapping = fieldMap.GetField(node.Field, FilterOperator.Present);
         var memberExpression = EntityMemberBinder.Bind(mapping.EntityExpression, parameter);
 
@@ -133,69 +138,12 @@ public static class FilterCompiler
         return Expression.NotEqual(memberExpression, Expression.Constant(null, memberExpression.Type));
     }
 
-    // Projects the deserialized value through a member access on a captured carrier object instead of
-    // baking it into an Expression.Constant. EF Core's parameter extraction lifts a member access on a
-    // captured instance into a query parameter (@p), whereas a constant is emitted as a literal into the
-    // SQL text. Parameterizing means distinct filter values produce one identical, cacheable SQL string,
-    // so the plan cache and any compiled-query cache are reused across requests on the hottest read path.
-    private static Expression BuildValueAccessor(object? value, Type propertyType)
-    {
-        // A single non-generic holder avoids MakeGenericType/Activator per node (Compile runs per request
-        // on the hot read path); the Convert restores the static type EF needs and unboxes value types.
-        var carrier = new ValueCarrier(value);
-        var carrierConstant = Expression.Constant(carrier);
-        // Use the cached PropertyInfo overload of Expression.Property; the string-name overload does a
-        // Type.GetProperty reflection lookup on every call, and Compile runs per comparison node per request.
-        var valueAccess = Expression.Property(carrierConstant, ValueProperty);
-        return Expression.Convert(valueAccess, propertyType);
-    }
-
-    private static Expression BuildStringComparison(FilterOperator op, Expression member, Expression value, FilterStringMatch stringMatch)
-    {
-        var (methodName, negated) = ResolveStringMethod(op);
-
-        // Collation mode leaves the column bare so a case-insensitive column collation can carry the
-        // case-folding and an index on the column stays usable, but that means the string method is called
-        // on the raw member: a null member would throw a NullReferenceException in-memory / client-eval,
-        // and a null filter value would produce member.Method(null) => ArgumentNullException.
-        // Guard the member with a null-check that keeps the column bare in the LIKE (`col IS NOT NULL AND
-        // col LIKE ...` still uses the index), and coalesce only the VALUE operand: the value is a
-        // parameter (the ValueCarrier), NOT the column, so `value ?? ""` guards a null filter value without
-        // wrapping the column, keeping the LIKE sargable.
-        // Semantics: Collation mode matches SQL semantics — a null column does not match (`col LIKE @p`
-        // with col NULL yields no match), which is the whole point of the opt-in. This differs from
-        // LowerInvariant's vacuous-true on a null member with an empty pattern ("".Contains("") == true);
-        // for a null member positive ops => false and Not* => true here.
-        if (stringMatch == FilterStringMatch.Collation)
-        {
-            var safeValue = Expression.Coalesce(value, Expression.Constant(string.Empty));
-            var call = Expression.Call(member, methodName, null, safeValue);
-            return negated
-                ? Expression.OrElse(Expression.Equal(member, NullString), Expression.Not(call))
-                : Expression.AndAlso(Expression.NotEqual(member, NullString), call);
-        }
-
-        var lowered = Expression.Call(ToLowerNullSafe(member), methodName, null, ToLowerNullSafe(value));
-        return negated ? Expression.Not(lowered) : lowered;
-    }
-
-    private static (string MethodName, bool Negated) ResolveStringMethod(FilterOperator op) => op switch
-    {
-        FilterOperator.Contains => (nameof(string.Contains), false),
-        FilterOperator.NotContains => (nameof(string.Contains), true),
-        FilterOperator.StartsWith => (nameof(string.StartsWith), false),
-        FilterOperator.NotStartsWith => (nameof(string.StartsWith), true),
-        FilterOperator.EndsWith => (nameof(string.EndsWith), false),
-        FilterOperator.NotEndsWith => (nameof(string.EndsWith), true),
-        _ => throw new InvalidOperationException($"Unsupported string operator: {op}")
-    };
-
     private static Expression BuildValueComparison(FilterOperator op, Expression member, Expression value, FilterStringMatch stringMatch)
     {
         if (member.Type == typeof(string) && stringMatch == FilterStringMatch.LowerInvariant)
         {
-            member = ToLowerNullSafe(member);
-            value = ToLowerNullSafe(value);
+            member = FilterOperands.ToLowerNullSafe(member);
+            value = FilterOperands.ToLowerNullSafe(value);
         }
 
         return op switch
@@ -228,57 +176,8 @@ public static class FilterCompiler
         return expressions.Aggregate(Expression.OrElse);
     }
 
-    // Lowercases a string expression after coalescing null to an empty string, so case-insensitive
-    // comparisons never dereference a null entity property (which would throw a NullReferenceException
-    // during in-memory evaluation). Translates to LOWER(COALESCE(col, '')) under EF Core.
-    private static Expression ToLowerNullSafe(Expression stringExpression)
-    {
-        var coalesced = Expression.Coalesce(stringExpression, Expression.Constant(string.Empty));
-        return Expression.Call(coalesced, ToLowerMethod);
-    }
-
-    private static ValidationException PresenceAsComparison(string field) =>
-        new(new Dictionary<string, string[]>
-        {
-            ["filter"] = [$"The 'pr' (present) operator is a presence test on '{field}': use a 'present' node, not a 'comparison'."]
-        });
-
-    private static ValidationException NullValueOnNonNullableField(string field) =>
-        new(new Dictionary<string, string[]>
-        {
-            ["filter"] = [$"'{field}' can never be null, so it cannot be compared with null. Use the 'present' node to ask whether a nullable field has a value."]
-        });
-
-    private static ValidationException NullWithNonEqualityOperator(FilterOperator op, string field) =>
-        new(new Dictionary<string, string[]>
-        {
-            ["filter"] = [$"Operator '{op}' cannot be applied to a null value on '{field}'. Only 'eq' and 'neq' compare with null; use the 'present' node to ask whether the field has a value."]
-        });
-
-    private static ValidationException StringOperatorOnNonStringField(FilterOperator op, string field) =>
-        new(new Dictionary<string, string[]>
-        {
-            ["filter"] = [$"Operator '{op}' can only be applied to a string field, but '{field}' is not a string."]
-        });
-
-    private static bool IsStringOperation(FilterOperator op)
-    {
-        return op is FilterOperator.Contains or FilterOperator.NotContains
-            or FilterOperator.StartsWith or FilterOperator.NotStartsWith
-            or FilterOperator.EndsWith or FilterOperator.NotEndsWith;
-    }
-
     private static object? DeserializeValue(JsonElement element, Type targetType)
     {
         return element.Deserialize(targetType);
     }
-
-    /// <summary>
-    /// A minimal non-generic holder whose sole purpose is to give EF Core's parameter extraction a member
-    /// access on a captured instance to lift into a query parameter. Holds <see cref="object"/> so no
-    /// per-node generic construction is needed; the caller restores the static type with a Convert. See
-    /// <see cref="BuildValueAccessor"/>.
-    /// </summary>
-    /// <param name="Value">The filter value being carried, boxed as <see cref="object"/>.</param>
-    private sealed record ValueCarrier(object? Value);
 }

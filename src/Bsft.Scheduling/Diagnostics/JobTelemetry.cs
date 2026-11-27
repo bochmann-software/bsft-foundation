@@ -20,6 +20,7 @@ internal sealed class JobTelemetry : IJobTelemetry
     private const string JobNameTag = "job.name";
 
     private readonly IInstrumentationSource _source;
+    private readonly TimeProvider _timeProvider;
     private readonly Counter<long> _enqueued;
     private readonly Counter<long> _claimed;
     private readonly Counter<long> _skipped;
@@ -29,11 +30,14 @@ internal sealed class JobTelemetry : IJobTelemetry
     /// Initializes a new instance of the <see cref="JobTelemetry"/> class.
     /// </summary>
     /// <param name="sources">The instrumentation source provider.</param>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="sources"/> is null.</exception>
-    public JobTelemetry(IInstrumentationSourceProvider sources)
+    /// <param name="timeProvider">The clock an execution's duration is measured on.</param>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    public JobTelemetry(IInstrumentationSourceProvider sources, TimeProvider timeProvider)
     {
         if (sources is null)
             throw new ArgumentNullException(nameof(sources));
+
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
 
         _source = sources.Get(SourceName);
         _enqueued = _source.GetOrCreateCounter(EnqueuedCounter);
@@ -65,7 +69,7 @@ internal sealed class JobTelemetry : IJobTelemetry
             activity.SetTag("job.attempt", attemptNumber);
         }
 
-        return new JobExecutionTelemetryScope(this, activity, jobName);
+        return new JobExecutionTelemetryScope(this, _timeProvider, activity, jobName);
     }
 
     /// <summary>Records the duration of a finished execution with its outcome.</summary>

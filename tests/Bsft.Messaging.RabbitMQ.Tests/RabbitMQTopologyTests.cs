@@ -84,12 +84,12 @@ public class RabbitMQTopologyTests
         var options = TestOptions.Valid();
         options.ApplicationName = string.Empty;
         options.ExchangeName = "shared.events";
-        options.QueueName = "reporting.queue";
+        options.QueueName = "documents.queue";
 
         var topology = new RabbitMQTopology(options);
 
         topology.ExchangeName.Should().Be("shared.events");
-        topology.QueueName.Should().Be("reporting.queue");
+        topology.QueueName.Should().Be("documents.queue");
     }
 
     [Fact]

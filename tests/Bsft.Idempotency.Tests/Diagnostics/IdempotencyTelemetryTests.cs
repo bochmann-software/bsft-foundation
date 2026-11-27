@@ -32,6 +32,7 @@ public class IdempotencyTelemetryTests : IDisposable
     [InlineData(IdempotencyAuditAction.Replayed, "bsft.idempotency.replayed")]
     [InlineData(IdempotencyAuditAction.KeyReused, "bsft.idempotency.conflicted")]
     [InlineData(IdempotencyAuditAction.InProgress, "bsft.idempotency.in_progress")]
+    [InlineData(IdempotencyAuditAction.ResponseWithheld, "bsft.idempotency.withheld")]
     public void Record_ADecision_CountsItOnItsOwnInstrument(IdempotencyAuditAction action, string instrument)
     {
         var telemetry = Telemetry();

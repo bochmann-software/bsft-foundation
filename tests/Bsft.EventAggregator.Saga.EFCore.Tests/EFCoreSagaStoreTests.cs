@@ -1,4 +1,5 @@
 using Bsft.EventAggregator.Saga.EFCore.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +24,7 @@ public class EFCoreSagaStoreTests
             db.Database.EnsureCreated();
         }
 
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         return (store, provider);
     }
 

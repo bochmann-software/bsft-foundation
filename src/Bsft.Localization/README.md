@@ -52,9 +52,12 @@ bounds what an anonymous request can make the process hold.
 | `BsftLocalizationOptions.RoutePrefix` | `"/api/localization"` | Where `MapBsftLocalization` mounts the three read endpoints. Read once, at map time. |
 | `BsftLocalizationOptions.MaxFilterModules` | `32` | Distinct modules one `?modules=` filter may name. |
 | `BsftLocalizationOptions.MaxFilterModuleNameLength` | `64` | Length of one module name in that filter. |
+| `BsftLocalizationOptions.MaxKeyLength` | `256` | Longest key `ITranslationLookup.Find` accepts; a longer one throws `ArgumentException`. |
+| `BsftLocalizationOptions.MissCacheMaxEntries` | `10000` | Live misses `ITranslationLookup` remembers at once. |
+| `BsftLocalizationOptions.MissCacheLifetime` | `00:00:30` | How long `ITranslationLookup` remembers a miss. |
 
 Validation: both locales must be non-blank, the route prefix must be an absolute path starting with
-`/`, and both filter ceilings must be positive. A failure names the member and the offending value,
+`/`, both filter ceilings, `MaxKeyLength`, `MissCacheMaxEntries` and `MissCacheLifetime` must be positive. A failure names the member and the offending value,
 and it is thrown from `AddBsftLocalization` as well as on start.
 
 ## Extend

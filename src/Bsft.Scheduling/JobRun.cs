@@ -46,6 +46,16 @@ public sealed class JobRun
     public DateTimeOffset? SettledAt { get; set; }
 
     /// <summary>
+    /// Gets or sets what the job reported about the run, or <c>null</c> when it reported nothing.
+    /// </summary>
+    /// <remarks>
+    /// The executor puts the value a job records through <see cref="JobExecutionContext.ResultRecorder"/>
+    /// on the claimed run, and <see cref="IJobStore.SettleAsync"/> stores it with the terminal state. A
+    /// retry stores none, so the result on a settled run is the one of the attempt that settled it.
+    /// </remarks>
+    public JobRunResult? Result { get; set; }
+
+    /// <summary>
     /// Gets or sets the optimistic concurrency token that turns a claim race between two instances
     /// into a detectable conflict instead of a double execution.
     /// </summary>

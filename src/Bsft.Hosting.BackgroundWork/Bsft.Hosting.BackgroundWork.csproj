@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Bsft.Instrumentation\Bsft.Instrumentation.csproj" />
+    <ProjectReference Include="..\Bsft.Hosting.StartGates\Bsft.Hosting.StartGates.csproj" />
   </ItemGroup>
 
   <!-- No FrameworkReference on Microsoft.AspNetCore.App and none of the packages Bsft.Hosting adds for

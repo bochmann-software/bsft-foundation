@@ -37,11 +37,18 @@ public static class MediatorServiceCollectionExtensions
         // no-op until an observability backend attaches a listener/exporter. The "Bsft.Mediator"
         // source is advertised for discovery via the vendor-neutral instrumentation layer.
         services.AddBsftInstrumentationSource(MediatorTelemetry.SourceName);
+        // The clock the telemetry and the logging behavior measure durations on.
+        services.TryAddSingleton(TimeProvider.System);
         // TryAdd, because the emitter is the documented seam for sending somewhere other than the
         // shipped ActivitySource: a host that registers its own would otherwise be resolved past.
         services.TryAddSingleton<IMediatorTelemetry, MediatorTelemetry>();
 
         services.AddSingleton(configuration);
+        services.AddSingleton<IMediatorTransactionPolicy>(configuration);
+
+        // Scoped, so the marks the retry and transaction behaviors leave belong to one scope: a request
+        // dispatched in another scope is the outermost of its own.
+        services.TryAddScoped<IRequestNesting, RequestNesting>();
 
         // The live collection, so the startup validator sees the behaviors registered after this
         // call too — a behavior package's own AddBsft* or a direct registration — and can report one
@@ -87,6 +94,12 @@ public static class MediatorServiceCollectionExtensions
             services,
             provider.GetRequiredService<PipelineBehaviorRegistrations>(),
             provider.GetRequiredService<Transactions.ITransactionDbContextResolver>()));
+
+        // A policy that asks for every command to be a transaction fails startup when the behavior
+        // that would open them is missing, instead of silently doing nothing.
+        services.AddTransient<IStartupValidator>(provider => new Transactions.TransactionPolicyStartupValidator(
+            configuration,
+            provider.GetRequiredService<PipelineBehaviorRegistrations>()));
 
         return services;
     }

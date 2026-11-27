@@ -17,28 +17,37 @@ namespace Bsft.Idempotency.Replay;
 /// challenge or a redirect writes straight to the response.
 /// </para>
 /// <para>
-/// It must be registered <em>after</em> <c>BsftExceptionMiddleware</c>, so the 428 and the two 409s
+/// It must be registered <em>after</em> <c>BsftExceptionMiddleware</c>, so the 428 and the 409s
 /// it raises are mapped into the framework's problem-details shape rather than escaping as a 500.
 /// The consequence, stated rather than glossed: a request that fails by <em>throwing</em> is not
 /// cached, because the response is produced outside this middleware, so its reservation is released
 /// and the same key runs again. Only a status the endpoint wrote itself is stored.
+/// </para>
+/// <para>
+/// On an endpoint marked <see cref="SensitiveIdempotentResponseAttribute"/> the stored body is sealed
+/// by <see cref="IIdempotencyResponseProtector"/> after the endpoint has answered, and a replay whose
+/// body cannot be unsealed is refused with a 409 rather than written.
 /// </para>
 /// </remarks>
 internal sealed class IdempotencyMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly BsftIdempotencyOptions _options;
+    private readonly IIdempotencyResponseProtector _protector;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="IdempotencyMiddleware"/> class.
     /// </summary>
     /// <param name="next">The next middleware in the pipeline.</param>
     /// <param name="options">Which header, which methods, and what is stored.</param>
+    /// <param name="protector">Seals the stored response of an endpoint whose response carries a secret.</param>
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
-    public IdempotencyMiddleware(RequestDelegate next, IOptions<BsftIdempotencyOptions> options)
+    public IdempotencyMiddleware(
+        RequestDelegate next, IOptions<BsftIdempotencyOptions> options, IIdempotencyResponseProtector protector)
     {
         _next = next ?? throw new ArgumentNullException(nameof(next));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _protector = protector ?? throw new ArgumentNullException(nameof(protector));
     }
 
     /// <summary>
@@ -61,7 +70,8 @@ internal sealed class IdempotencyMiddleware
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(observer);
 
-        var metadata = context.GetEndpoint()?.Metadata.GetMetadata<IIdempotencyMetadata>();
+        var endpointMetadata = context.GetEndpoint()?.Metadata;
+        var metadata = endpointMetadata?.GetMetadata<IIdempotencyMetadata>();
 
         if (metadata is null || !IsConsideredMethod(context.Request.Method))
         {
@@ -81,7 +91,9 @@ internal sealed class IdempotencyMiddleware
 
         IdempotencyKeyGuard.Ensure(key, _options.MaxKeyLength);
 
-        await ProtectAsync(context, gate, observer, key).ConfigureAwait(false);
+        var isSensitive = endpointMetadata!.GetMetadata<SensitiveIdempotentResponseAttribute>() is not null;
+
+        await ProtectAsync(context, gate, observer, key, isSensitive).ConfigureAwait(false);
     }
 
     /// <summary>Reports whether this method is one the host asked to protect.</summary>
@@ -125,16 +137,17 @@ internal sealed class IdempotencyMiddleware
     /// <param name="gate">What decides, and what records.</param>
     /// <param name="observer">Where a decision is reported.</param>
     /// <param name="key">The key the client sent.</param>
+    /// <param name="isSensitive">Whether the endpoint's response carries a secret.</param>
     /// <returns>A task that completes when the request has been answered.</returns>
     private async Task ProtectAsync(
-        HttpContext context, IIdempotencyGate gate, IIdempotencyObserver observer, string key)
+        HttpContext context, IIdempotencyGate gate, IIdempotencyObserver observer, string key, bool isSensitive)
     {
         var result = await gate.BeginAsync(context, key, context.RequestAborted).ConfigureAwait(false);
 
         switch (result.Begin.Outcome)
         {
             case IdempotencyBeginOutcome.Replayed:
-                await ReplayAsync(context, observer, result, key).ConfigureAwait(false);
+                await ReplayAsync(context, observer, result, key, isSensitive).ConfigureAwait(false);
 
                 return;
 
@@ -152,7 +165,7 @@ internal sealed class IdempotencyMiddleware
                 throw await PendingAsync(context, gate, observer, result, key).ConfigureAwait(false);
 
             default:
-                await RunAsync(context, gate, result, key).ConfigureAwait(false);
+                await RunAsync(context, gate, result, key, isSensitive).ConfigureAwait(false);
 
                 return;
         }
@@ -163,14 +176,14 @@ internal sealed class IdempotencyMiddleware
     /// <param name="observer">Where the decision is reported.</param>
     /// <param name="result">What the gate decided.</param>
     /// <param name="key">The key the client sent.</param>
+    /// <param name="isSensitive">Whether the endpoint's response carries a secret.</param>
     /// <returns>A task that completes when the response has been written.</returns>
-    private static async Task ReplayAsync(
-        HttpContext context, IIdempotencyObserver observer, IdempotencyGateResult result, string key)
+    /// <exception cref="ConflictException">
+    /// Thrown when the stored response carried a secret that cannot be replayed.
+    /// </exception>
+    private async Task ReplayAsync(
+        HttpContext context, IIdempotencyObserver observer, IdempotencyGateResult result, string key, bool isSensitive)
     {
-        await observer
-            .ReportAsync(IdempotencyAuditAction.Replayed, result.Scope, key, context.RequestAborted)
-            .ConfigureAwait(false);
-
         // Checked rather than asserted with `!`. The store is a public seam, and a host's own
         // implementation that answers Replayed with no response is a contract breach whose name should
         // appear in the log - not a NullReferenceException thrown from a middleware.
@@ -179,8 +192,24 @@ internal sealed class IdempotencyMiddleware
                 $"The idempotency store reported a replay for scope '{result.Scope}' but carried no stored response. "
                 + $"{nameof(IdempotencyBeginResult)}.{nameof(IdempotencyBeginResult.Response)} is required whenever the outcome is Replayed.");
 
+        if (_protector.FindReplayableBody(replayed.Body, isSensitive, result.Scope, key) is not { } replayableBody)
+        {
+            await observer
+                .ReportAsync(IdempotencyAuditAction.ResponseWithheld, result.Scope, key, context.RequestAborted)
+                .ConfigureAwait(false);
+
+            throw new ConflictException(
+                "The request under this idempotency key already ran, and its response carried a secret that "
+                + "is not available for replay. Treat the secret as issued: rotate it instead of retrying.",
+                IdempotencyDefaults.ResponseWithheldErrorCode);
+        }
+
+        await observer
+            .ReportAsync(IdempotencyAuditAction.Replayed, result.Scope, key, context.RequestAborted)
+            .ConfigureAwait(false);
+
         await IdempotencyReplayWriter
-            .WriteAsync(context.Response, replayed, context.RequestAborted)
+            .WriteAsync(context.Response, replayed with { Body = replayableBody }, context.RequestAborted)
             .ConfigureAwait(false);
     }
 
@@ -226,9 +255,10 @@ internal sealed class IdempotencyMiddleware
     /// <param name="gate">What records the outcome.</param>
     /// <param name="result">What the gate decided, carrying the scope and the fingerprint.</param>
     /// <param name="key">The key the client sent.</param>
+    /// <param name="isSensitive">Whether the response carries a secret and is sealed before it is stored.</param>
     /// <returns>A task that completes when the response has been written.</returns>
     private async Task RunAsync(
-        HttpContext context, IIdempotencyGate gate, IdempotencyGateResult result, string key)
+        HttpContext context, IIdempotencyGate gate, IdempotencyGateResult result, string key, bool isSensitive)
     {
         using var buffer = new ResponseBodyBuffer(context.Response);
 
@@ -253,6 +283,12 @@ internal sealed class IdempotencyMiddleware
 
             throw;
         }
+
+        // Sealed before it reaches the store, so the plaintext of a secret never sits in a record. Outside
+        // the try above on purpose: the endpoint has succeeded, and a body that cannot be sealed is simply
+        // not stored, which releases the key, rather than turning a delivered secret into a 500.
+        if (isSensitive && snapshot is not null)
+            snapshot = _protector.Protect(snapshot.Body, result.Scope, key) is { } sealedBody ? snapshot with { Body = sealedBody } : null;
 
         try
         {

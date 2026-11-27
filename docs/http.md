@@ -31,6 +31,11 @@ string?[] segments = ["en", tenantId, "2", "greeting", "Hello", "bye", "Goodbye"
 var tag = segments.ToCanonicalHash().ToContentHashEntityTag();   // "sha256-<64 hex chars>"
 ```
 
+`ToCanonicalHash` lives in `Bsft.Core` (namespace `Bsft.Core`) since 2.2.1-preview.1, so code without an
+ASP.NET Core reference computes the same digest; `Bsft.Http` references `Bsft.Core` and keeps a hidden
+`Bsft.Http.CanonicalHash.ToCanonicalHash(IEnumerable<string?>)` for binaries compiled against the older
+assembly. Source that called the extension adds `using Bsft.Core;`.
+
 `ToContentHashEntityTag` produces a **strong**, quoted validator. It sanitises what it is given
 to the characters RFC 9110 allows inside a tag, so a digest that somehow arrived with a carriage
 return in it cannot become a second response header.
@@ -184,6 +189,26 @@ Until 2.0 each of fifteen packages declared its own copy of this record in its o
 reader had to know every one of them. There is now one type, here, because this is the one package
 every route-mapping package can reference without taking on anything but the ASP.NET Core shared
 framework it already carries.
+
+## Checking that a request is same-origin
+
+`request.IsSameOrigin(publicOrigin)` answers whether a request a browser sent with its cookies comes
+from the application's own origin. Fetch metadata decides first: with `Sec-Fetch-Site` present, the
+request is same-origin exactly when it is `same-origin`, and `same-site`, `cross-site` or `none` are
+refused. The browser sets that header and a page cannot forge it, and it needs no public origin, so the
+check keeps working behind a TLS-terminating proxy that forwards no scheme. Only without fetch metadata (an
+older engine) does `Origin` decide: exactly one value equal to the public origin, or to the request's own
+scheme and host when none is configured. `Origin: null` and a request with neither header are refused.
+
+```csharp
+if (!httpContext.Request.IsSameOrigin(options.PublicOrigin))
+    return Results.Problem(statusCode: StatusCodes.Status403Forbidden);
+```
+
+It lives here because every same-origin endpoint of one host has to answer the question identically:
+`Bsft.Auth.TokenMediation` (`/session/*`) and the client log of `Bsft.Hosting.ClientApp` run side by
+side in the same process, and two copies that drifted apart would let one of them accept what the other
+refuses. A caller that wants more adds it on top, as token mediation does with its custom header.
 
 ## Who uses it
 

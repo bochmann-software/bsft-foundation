@@ -196,6 +196,43 @@ public class InMemoryJobStoreTests
     }
 
     [Fact]
+    public async Task SettlingOrRetryingARunTheStoreNeverHeldChangesNothing()
+    {
+        var stored = await EnqueueAndReadAsync("report", _now);
+        var neverStored = Pending("report", _now);
+
+        await _store.SettleAsync(neverStored, JobRunStatus.Completed, _now.AddMinutes(1));
+        await _store.RetryAsync(neverStored, _now.AddMinutes(2));
+
+        var after = await _store.FindAsync(stored.Id);
+        after!.Status.Should().Be(JobRunStatus.Pending);
+        after.DueAt.Should().Be(_now);
+        after.SettledAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SettlingStoresTheResultTheRunCarries()
+    {
+        var claimed = await ClaimAsync("report", _now);
+        claimed.Result = TestRunResults.Of("report/v1", """{"rows":3}""");
+
+        await _store.SettleAsync(claimed, JobRunStatus.Completed, _now.AddMinutes(1));
+
+        (await _store.FindAsync(claimed.Id))!.Result.Should().Be(TestRunResults.Of("report/v1", """{"rows":3}"""));
+    }
+
+    [Fact]
+    public async Task RetryingStoresNoResultForTheAttemptThatFailed()
+    {
+        var claimed = await ClaimAsync("report", _now);
+        claimed.Result = TestRunResults.Of("report/v1", """{"rows":3}""");
+
+        await _store.RetryAsync(claimed, _now.AddMinutes(10));
+
+        (await _store.FindAsync(claimed.Id))!.Result.Should().BeNull();
+    }
+
+    [Fact]
     public async Task SettlingWithAStaleTokenIsIgnoredBecauseTheLeaseWasLost()
     {
         var claimed = await ClaimAsync("report", _now);
@@ -456,6 +493,7 @@ public class InMemoryJobStoreTests
         LeaseOwner = run.LeaseOwner,
         LeaseExpiresAt = run.LeaseExpiresAt,
         SettledAt = run.SettledAt,
+        Result = run.Result,
         ConcurrencyToken = run.ConcurrencyToken,
     };
 }

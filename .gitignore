@@ -44,3 +44,6 @@ cov/
 
 # Mutation testing (Stryker.NET) sandboxes and reports
 StrykerOutput/
+
+# Core dumps from crashed test hosts
+core.[0-9]*

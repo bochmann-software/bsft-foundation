@@ -1,4 +1,6 @@
 using Bsft.Core.Polling;
+using Bsft.Core.Tenancy;
+using Bsft.Data.MultiTenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -42,6 +44,8 @@ internal sealed class IdempotencyRecordSweeper : BackgroundService, IPollReporte
     /// </summary>
     private const int BatchSize = 500;
 
+    private readonly IBackgroundTenantSource? _tenants;
+    private readonly ITenantScopeFactory? _tenantScopes;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly BsftIdempotencyOptions _options;
     private readonly TimeProvider _timeProvider;
@@ -67,6 +71,55 @@ internal sealed class IdempotencyRecordSweeper : BackgroundService, IPollReporte
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IdempotencyRecordSweeper"/> class that runs each pass once per tenant
+    /// of <paramref name="tenants"/>, with <see cref="BackgroundTenant.Current"/> set, so that every scope a pass opens
+    /// resolves that tenant. The container picks this constructor when an <see cref="IBackgroundTenantSource"/> is
+    /// registered.
+    /// </summary>
+    /// <param name="scopeFactory">As for the constructor without the tenant source.</param>
+    /// <param name="options">As for the constructor without the tenant source.</param>
+    /// <param name="timeProvider">As for the constructor without the tenant source.</param>
+    /// <param name="logger">As for the constructor without the tenant source.</param>
+    /// <param name="tenants">The tenants the passes run for.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    public IdempotencyRecordSweeper(
+        IServiceScopeFactory scopeFactory,
+        IOptions<BsftIdempotencyOptions> options,
+        TimeProvider timeProvider,
+        ILogger<IdempotencyRecordSweeper> logger,
+        IBackgroundTenantSource tenants)
+        : this(scopeFactory, options, timeProvider, logger)
+    {
+        _tenants = tenants ?? throw new ArgumentNullException(nameof(tenants));
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IdempotencyRecordSweeper"/> class that runs each pass once per tenant
+    /// of <paramref name="tenants"/> and opens the scope of a tenant's pass through <paramref name="tenantScopes"/>,
+    /// with <see cref="ITenantScopeFactory.CreateScopeAsync"/>, so that a host whose tenant scope binds with I/O is
+    /// never called synchronously. The container picks this constructor when an <see cref="IBackgroundTenantSource"/>
+    /// and an <see cref="ITenantScopeFactory"/> are registered.
+    /// </summary>
+    /// <param name="scopeFactory">As for the constructor without the tenant source.</param>
+    /// <param name="options">As for the constructor without the tenant source.</param>
+    /// <param name="timeProvider">As for the constructor without the tenant source.</param>
+    /// <param name="logger">As for the constructor without the tenant source.</param>
+    /// <param name="tenants">The tenants the passes run for.</param>
+    /// <param name="tenantScopes">Opens the scope of a tenant's pass.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    public IdempotencyRecordSweeper(
+        IServiceScopeFactory scopeFactory,
+        IOptions<BsftIdempotencyOptions> options,
+        TimeProvider timeProvider,
+        ILogger<IdempotencyRecordSweeper> logger,
+        IBackgroundTenantSource tenants,
+        ITenantScopeFactory tenantScopes)
+        : this(scopeFactory, options, timeProvider, logger, tenants)
+    {
+        _tenantScopes = tenantScopes ?? throw new ArgumentNullException(nameof(tenantScopes));
+    }
+
     /// <inheritdoc />
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => RunLoopAsync(stoppingToken);
 
@@ -81,7 +134,7 @@ internal sealed class IdempotencyRecordSweeper : BackgroundService, IPollReporte
         // and the cap keeps a long one from becoming a rare, enormous delete.
         var interval = retention < MaxSweepInterval ? retention : MaxSweepInterval;
 
-        await new PollLoop(SweepAsync, this, interval).RunAsync(stoppingToken).ConfigureAwait(false);
+        await new PollLoop(BackgroundTenantPasses.PerTenant(_tenants, SweepAsync), this, interval, _timeProvider).RunAsync(stoppingToken).ConfigureAwait(false);
     }
 
     /// <summary>One pass, which asks for another when it filled its batch.</summary>
@@ -110,7 +163,7 @@ internal sealed class IdempotencyRecordSweeper : BackgroundService, IPollReporte
     {
         var now = _timeProvider.GetUtcNow().UtcDateTime;
 
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IIdempotencyDbContext>();
 
         // Set-based rather than loading the rows, and bounded rather than open-ended. The cap costs
@@ -124,8 +177,14 @@ internal sealed class IdempotencyRecordSweeper : BackgroundService, IPollReporte
         // same row - and deleting it by id alone would free a key a request is using. Carrying the
         // predicate means the worst a concurrent sweep leaves is a row already gone, which the delete
         // reports as zero rows.
-        var expired = await db.IdempotencyRecords
-            .Where(entity => entity.ExpiresAt < now)
+        //
+        // Under tenant keys a pass inside a BackgroundTenant sweeps that tenant only.
+        var lapsed = db.IdempotencyRecords.Where(entity => entity.ExpiresAt < now);
+
+        if (db.IdempotencyRecords.IsTenantKeyed() && scope.ServiceProvider.FindCurrentTenantId() is { } tenantId)
+            lapsed = lapsed.Where(entity => entity.TenantId == tenantId);
+
+        var expired = await lapsed
             .OrderBy(entity => entity.Id)
             .Take(BatchSize)
             .Select(entity => entity.Id)
@@ -134,8 +193,8 @@ internal sealed class IdempotencyRecordSweeper : BackgroundService, IPollReporte
 
         var pruned = expired.Count == 0
             ? 0
-            : await db.IdempotencyRecords
-                .Where(entity => expired.Contains(entity.Id) && entity.ExpiresAt < now)
+            : await lapsed
+                .Where(entity => expired.Contains(entity.Id))
                 .ExecuteDeleteAsync(cancellationToken)
                 .ConfigureAwait(false);
 

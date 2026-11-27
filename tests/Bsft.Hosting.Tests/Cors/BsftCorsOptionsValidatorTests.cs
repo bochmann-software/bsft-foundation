@@ -38,4 +38,38 @@ public class BsftCorsOptionsValidatorTests
 
         act.Should().Throw<ArgumentNullException>().WithParameterName("options");
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void Validate_WithBlankPolicyName_FailsNamingPolicyName(string policyName)
+    {
+        var options = new BsftCorsOptions { PolicyName = policyName };
+
+        var result = new BsftCorsOptionsValidator().Validate(name: null, options);
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain("PolicyName");
+    }
+
+    [Fact]
+    public void Validate_WithBlankExposedHeader_FailsNamingTheIndex()
+    {
+        var options = new BsftCorsOptions().ExposeHeaders("ETag", " ");
+
+        var result = new BsftCorsOptionsValidator().Validate(name: null, options);
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain("ExposedHeaders[1]");
+    }
+
+    [Fact]
+    public void Validate_WithExposedHeadersAndCustomPolicyName_Succeeds()
+    {
+        var options = new BsftCorsOptions { PolicyName = "Custom" }.ExposeHeaders("ETag", "Location");
+
+        var result = new BsftCorsOptionsValidator().Validate(name: null, options);
+
+        result.Succeeded.Should().BeTrue();
+    }
 }

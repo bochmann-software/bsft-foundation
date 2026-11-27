@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+    <Compile Include="..\Shared\ControllableStartGate.cs" Link="Shared\ControllableStartGate.cs" />
+    <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
+    <Compile Include="..\Shared\PostgresTestServer.cs" Link="Shared\PostgresTestServer.cs" />
+    <Compile Include="..\Shared\PostgresFactAttribute.cs" Link="Shared\PostgresFactAttribute.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bsft.Outbox.Postgres\Bsft.Outbox.Postgres.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+</Project>

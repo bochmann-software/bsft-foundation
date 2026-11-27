@@ -2,6 +2,7 @@ using Bsft.Messaging.EFCore.Postgres.DependencyInjection;
 using Bsft.Messaging.EFCore.Postgres.Tests.Fakes;
 using Bsft.Messaging.EFCore.Postgres.Tests.Support;
 using Bsft.Messaging.Outbox;
+using Bsft.Outbox.Postgres;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -56,6 +57,27 @@ public class PostgresServiceCollectionExtensionsTests
 
         provider.GetServices<IHostedService>().Should().ContainSingle()
             .Which.Should().BeOfType<OutboxNotificationWorker>();
+    }
+
+    [Fact]
+    public void AddBsftMessagingEFCorePostgres_ListensThroughTheSharedSession()
+    {
+        using var provider = Build();
+
+        provider.GetRequiredService<IPostgresListenSession>().Should().BeOfType<PostgresListenSession>();
+    }
+
+    [Fact]
+    public void AddBsftMessagingEFCorePostgres_KeepsASessionTheHostRegistered()
+    {
+        var session = new RecordingListenSession();
+        var services = Host();
+        services.AddSingleton<IPostgresListenSession>(session);
+        services.AddBsftMessagingEFCorePostgres<TestOutboxDbContext>();
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IPostgresListenSession>().Should().BeSameAs(session);
     }
 
     [Fact]
@@ -130,5 +152,53 @@ public class PostgresServiceCollectionExtensionsTests
         withoutServices.Should().Throw<ArgumentNullException>();
         withoutServicesAndConfiguration.Should().Throw<ArgumentNullException>();
         withoutConfiguration.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void AddBsftMessagingEFCorePostgres_WithInProcessWakeEnabled_ResolvesOneInProcessOutboxWake()
+    {
+        using var provider = Build(options => options.IsInProcessWake = true);
+        using var scope = provider.CreateScope();
+
+        scope.ServiceProvider.GetService<IOutboxNotifier>()
+            .Should().BeOfType<InProcessOutboxWake>();
+        scope.ServiceProvider.GetService<IOutboxNotificationChannel>()
+            .Should().BeOfType<InProcessOutboxWake>();
+    }
+
+    [Fact]
+    public void AddBsftMessagingEFCorePostgres_WithInProcessWakeDisabled_ResolvesPostgresTypes()
+    {
+        using var provider = Build(options => options.IsInProcessWake = false);
+        using var scope = provider.CreateScope();
+
+        scope.ServiceProvider.GetService<IOutboxNotifier>()
+            .Should().BeOfType<PostgresOutboxNotifier>();
+        scope.ServiceProvider.GetService<IOutboxNotificationChannel>()
+            .Should().BeOfType<PostgresOutboxNotificationChannel<TestOutboxDbContext>>();
+    }
+
+    [Fact]
+    public void AddBsftMessagingEFCorePostgres_DefaultIsInProcessWakeDisabled_ResolvesPostgresTypes()
+    {
+        using var provider = Build();
+        using var scope = provider.CreateScope();
+
+        scope.ServiceProvider.GetService<IOutboxNotifier>()
+            .Should().BeOfType<PostgresOutboxNotifier>();
+        scope.ServiceProvider.GetService<IOutboxNotificationChannel>()
+            .Should().BeOfType<PostgresOutboxNotificationChannel<TestOutboxDbContext>>();
+    }
+
+    [Fact]
+    public void AddBsftMessagingEFCorePostgres_WithInProcessWakeEnabled_UsesSingletonInstance()
+    {
+        using var provider = Build(options => options.IsInProcessWake = true);
+        using var scope = provider.CreateScope();
+
+        var notifier = scope.ServiceProvider.GetService<IOutboxNotifier>();
+        var channel = scope.ServiceProvider.GetService<IOutboxNotificationChannel>();
+
+        notifier.Should().BeSameAs(channel);
     }
 }

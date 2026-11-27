@@ -128,6 +128,25 @@ public class BsftSchedulingOptionsValidatorTests
         Validate(options).Succeeded.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(BsftSchedulingOptions.MaxResultBytesCeiling + 1)]
+    public void AResultBoundOutsideItsRangeIsRejected(int maxResultBytes)
+    {
+        ShouldFailOn(
+            new BsftSchedulingOptions { MaxResultBytes = maxResultBytes },
+            nameof(BsftSchedulingOptions.MaxResultBytes));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(BsftSchedulingOptions.MaxResultBytesCeiling)]
+    public void AResultBoundAtTheEdgesOfItsRangePasses(int maxResultBytes)
+    {
+        Validate(new BsftSchedulingOptions { MaxResultBytes = maxResultBytes }).Succeeded.Should().BeTrue();
+    }
+
     [Fact]
     public void EveryComplaintIsReportedAtOnceRatherThanOneRestartAtATime()
     {
@@ -142,6 +161,36 @@ public class BsftSchedulingOptionsValidatorTests
     }
 
     private ValidateOptionsResult Validate(BsftSchedulingOptions options) => _validator.Validate(null, options);
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ANonPositiveJobRunRetentionIsRejectedBecauseEverySweepWouldDeleteWhatJustSettled(int days)
+    {
+        ShouldFailOn(
+            new BsftSchedulingOptions { JobRunRetention = TimeSpan.FromDays(days) },
+            nameof(BsftSchedulingOptions.JobRunRetention));
+    }
+
+    [Fact]
+    public void APositiveJobRunRetentionPasses()
+    {
+        Validate(new BsftSchedulingOptions { JobRunRetention = TimeSpan.FromDays(7) }).Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ANegativeNumberOfKeptRunsIsRejected()
+    {
+        ShouldFailOn(
+            new BsftSchedulingOptions { JobRunRetentionKeepLatest = -1 },
+            nameof(BsftSchedulingOptions.JobRunRetentionKeepLatest));
+    }
+
+    [Fact]
+    public void ZeroKeptRunsPasses()
+    {
+        Validate(new BsftSchedulingOptions { JobRunRetentionKeepLatest = 0 }).Succeeded.Should().BeTrue();
+    }
 
     private void ShouldFailOn(BsftSchedulingOptions options, string member)
     {

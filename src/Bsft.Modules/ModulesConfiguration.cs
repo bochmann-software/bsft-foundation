@@ -49,6 +49,28 @@ public sealed class ModulesConfiguration
     }
 
     /// <summary>
+    /// Registers a module by a CLR type known only at run time, such as one a host discovered by scanning
+    /// the assemblies it was built with, instead of naming each module in code.
+    /// </summary>
+    /// <param name="moduleType">
+    /// A concrete class implementing <see cref="IModule"/> with a public parameterless constructor.
+    /// </param>
+    /// <returns>This configuration instance for fluent chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="moduleType"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="moduleType"/> is not such a type. Checked here rather than when the
+    /// catalog is built, so that the failure points at the call that passed the type.
+    /// </exception>
+    public ModulesConfiguration Add(Type moduleType)
+    {
+        ArgumentNullException.ThrowIfNull(moduleType);
+        ModuleCatalog.RequireModuleType(moduleType);
+
+        _configActions.Add(catalog => catalog.Add(moduleType));
+        return this;
+    }
+
+    /// <summary>
     /// Applies all collected configuration actions to the given catalog.
     /// </summary>
     /// <param name="catalog">The catalog to configure.</param>

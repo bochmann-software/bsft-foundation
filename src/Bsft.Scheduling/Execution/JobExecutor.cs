@@ -1,3 +1,4 @@
+using Bsft.Core.Tenancy;
 using Bsft.Scheduling.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -10,9 +11,11 @@ namespace Bsft.Scheduling.Execution;
 internal sealed class JobExecutor : IJobExecutor
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ITenantScopeFactory? _tenantScopes;
     private readonly TimeProvider _timeProvider;
     private readonly BsftSchedulingOptions _options;
     private readonly IJobTelemetry _telemetry;
+    private readonly IJobRunResultRecorderFactory _resultRecorders;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="JobExecutor"/> class.
@@ -21,12 +24,14 @@ internal sealed class JobExecutor : IJobExecutor
     /// <param name="timeProvider">Supplies the start instant recorded in the execution context.</param>
     /// <param name="options">Scheduling options, read for the lease duration that bounds an execution.</param>
     /// <param name="telemetry">Telemetry sink for the execution span and duration.</param>
+    /// <param name="resultRecorders">Creates the recorder each execution hands its job.</param>
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     public JobExecutor(
         IServiceScopeFactory scopeFactory,
         TimeProvider timeProvider,
         IOptions<BsftSchedulingOptions> options,
-        IJobTelemetry telemetry)
+        IJobTelemetry telemetry,
+        IJobRunResultRecorderFactory resultRecorders)
     {
         if (options is null)
             throw new ArgumentNullException(nameof(options));
@@ -34,7 +39,33 @@ internal sealed class JobExecutor : IJobExecutor
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+        _resultRecorders = resultRecorders ?? throw new ArgumentNullException(nameof(resultRecorders));
         _options = options.Value;
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="JobExecutor"/> class that opens a job's scope through
+    /// <paramref name="tenantScopes"/> while a background pass works for a tenant
+    /// (<see cref="BackgroundTenant.Current"/>), so that the host can prepare the tenant's scope before the job is
+    /// resolved. The container picks it when an <see cref="ITenantScopeFactory"/> is registered.
+    /// </summary>
+    /// <param name="scopeFactory">Creates the job's scope outside a tenant's pass.</param>
+    /// <param name="timeProvider">The clock the lease is measured on.</param>
+    /// <param name="options">The scheduling options carrying the lease duration.</param>
+    /// <param name="telemetry">Records each execution.</param>
+    /// <param name="resultRecorders">Creates the recorder each execution hands its job.</param>
+    /// <param name="tenantScopes">Creates the job's scope for the tenant of the pass.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    public JobExecutor(
+        IServiceScopeFactory scopeFactory,
+        TimeProvider timeProvider,
+        IOptions<BsftSchedulingOptions> options,
+        IJobTelemetry telemetry,
+        IJobRunResultRecorderFactory resultRecorders,
+        ITenantScopeFactory tenantScopes)
+        : this(scopeFactory, timeProvider, options, telemetry, resultRecorders)
+    {
+        _tenantScopes = tenantScopes ?? throw new ArgumentNullException(nameof(tenantScopes));
     }
 
     /// <inheritdoc />
@@ -54,7 +85,10 @@ internal sealed class JobExecutor : IJobExecutor
             startedAt,
             run.AttemptCount,
             run.CorrelationId,
-            run.Payload);
+            run.Payload)
+        {
+            ResultRecorder = _resultRecorders.Create(run),
+        };
 
         // The correlation id is restored around the scope, not inside it, so that everything resolved
         // from the scope — loggers, the correlation context, an audit sink — sees the id of the
@@ -67,7 +101,7 @@ internal sealed class JobExecutor : IJobExecutor
             using var timeout = new CancellationTokenSource(RemainingLease(run, startedAt), _timeProvider);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
 
-            using var scope = _scopeFactory.CreateScope();
+            await using var scope = await CreateJobScopeAsync(linked.Token).ConfigureAwait(false);
             var job = (IJob)scope.ServiceProvider.GetRequiredService(jobType);
 
             using var telemetryScope = _telemetry.BeginExecution(run.JobName, run.Id, run.AttemptCount);
@@ -103,4 +137,17 @@ internal sealed class JobExecutor : IJobExecutor
         var remaining = expiresAt - startedAt;
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
+
+    /// <summary>
+    /// Opens the scope a job runs in: the tenant's, through the host's factory, while a background pass works
+    /// for a tenant, and a plain one otherwise.
+    /// </summary>
+    /// <param name="cancellationToken">The run's token, which bounds binding the tenant's scope as it bounds the job.</param>
+    /// <remarks>
+    /// The tenant's scope is opened asynchronously, so a host that binds it with I/O does not block the
+    /// dispatcher's thread, and either scope is disposed asynchronously, so a service in it that is only
+    /// <see cref="IAsyncDisposable"/> is released without a fault.
+    /// </remarks>
+    private ValueTask<TenantPassScope> CreateJobScopeAsync(CancellationToken cancellationToken) =>
+        TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken);
 }

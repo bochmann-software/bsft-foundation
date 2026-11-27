@@ -216,6 +216,33 @@ public sealed class RetentionSweeperTests
     }
 
     [Fact]
+    public async Task RunLoopAsync_WaitsTheSweepIntervalOnTheInjectedClock()
+    {
+        var interval = TimeSpan.FromHours(1);
+        var clock = new ManualTimeProvider(Now);
+        var options = new BsftRetentionOptions
+        {
+            RetentionPeriod = Retention,
+            SweepInterval = interval,
+            MaxStartupStagger = TimeSpan.Zero,
+        };
+        var monitor = Substitute.For<IOptionsMonitor<BsftRetentionOptions>>();
+        monitor.Get(Arg.Any<string?>()).Returns(options);
+        var services = new ServiceCollection();
+        services.AddScoped(_ => new RecordingRetentionPass());
+        using var provider = services.BuildServiceProvider();
+        var scopes = new SignallingScopeFactory(provider.GetRequiredService<IServiceScopeFactory>());
+        var sweeper = new RetentionSweeper<RecordingRetentionPass>(
+            scopes, monitor, clock, NullLogger<RetentionSweeper<RecordingRetentionPass>>.Instance);
+
+        var passes = await new PollIntervalProbe(clock, interval).MeasureAsync(sweeper.RunLoopAsync, () => scopes.Created);
+
+        passes.First.Should().BePositive();
+        passes.BeforeInterval.Should().Be(passes.First, "the interval has not passed on the injected clock");
+        passes.AfterInterval.Should().BeGreaterThan(passes.First, "the interval passed on the injected clock");
+    }
+
+    [Fact]
     public async Task RunLoopAsync_PositiveStagger_WaitsTheDeterministicOffsetBeforeTheFirstSweep()
     {
         var maxStagger = TimeSpan.FromMinutes(10);
@@ -282,10 +309,11 @@ public sealed class RetentionSweeperTests
         var (sweeper, pass, _) = Build(o => o.RetentionPeriod = TimeSpan.FromMinutes(1));
 
         await sweeper.StartAsync(CancellationToken.None);
+        await sweeper.StartedAsync(CancellationToken.None);
         // Since Microsoft.Extensions.Hosting 10, StartAsync runs the whole of ExecuteAsync on the
         // thread pool, so a stop right after the start can come before the first sweep. The test waits
         // for it rather than relying on the synchronous start of earlier versions.
-        SpinWait.SpinUntil(() => pass.Calls.Count > 0, TimeSpan.FromSeconds(10)).Should().BeTrue();
+        await pass.FirstCall.WaitAsync(TimeSpan.FromSeconds(30));
         await sweeper.StopAsync(CancellationToken.None);
     }
 

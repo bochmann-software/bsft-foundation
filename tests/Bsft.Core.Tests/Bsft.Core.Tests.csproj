@@ -1,6 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <Compile Include="..\Shared\DependencyClosure.cs" Link="Shared\DependencyClosure.cs" />
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+    <Compile Include="..\Shared\ControllableStartGate.cs" Link="Shared\ControllableStartGate.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Data\IdnaTestV2.txt" LogicalName="Bsft.Core.Tests.IdnaTestV2.txt" />
+    <EmbeddedResource Include="Data\normalization-vectors.txt" LogicalName="Bsft.Core.Tests.normalization-vectors.txt" />
   </ItemGroup>
 
   <ItemGroup>

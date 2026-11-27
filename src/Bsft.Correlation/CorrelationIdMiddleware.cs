@@ -1,6 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using System.Text.RegularExpressions;
 
 namespace Bsft.Correlation;
 
@@ -13,14 +13,9 @@ namespace Bsft.Correlation;
 /// </summary>
 public sealed class CorrelationIdMiddleware
 {
-    // Client-supplied correlation IDs are echoed into the response header and the logging scope, so
-    // they must be constrained to a safe character set. This rejects CRLF and other control characters
-    // (preventing response-header injection and log forging) as well as unbounded values.
-    //
-    // The end anchor is \z rather than $ on purpose: $ also matches immediately before a single
-    // trailing newline, so "accepted\n" would pass a pattern that exists to reject exactly that.
-    private static readonly Regex SafeCorrelationId =
-        new(@"^[A-Za-z0-9._-]{1,128}\z", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+    // The fixed ASCII alphabet needs no regex engine or wall-clock timeout. Checking the length
+    // first bounds the work even when an untrusted caller supplies an oversized header.
+    private const int MaximumCorrelationIdLength = 128;
 
     private readonly RequestDelegate _next;
 
@@ -51,7 +46,7 @@ public sealed class CorrelationIdMiddleware
         var headerValue = context.Request.Headers[CorrelationDefaults.CorrelationId].FirstOrDefault();
 
         // Only accept the client value when it is well-formed; otherwise generate a fresh ID.
-        var correlationId = !string.IsNullOrWhiteSpace(headerValue) && SafeCorrelationId.IsMatch(headerValue)
+        var correlationId = IsSafeCorrelationId(headerValue)
             ? headerValue
             : Guid.NewGuid().ToString();
 
@@ -63,4 +58,22 @@ public sealed class CorrelationIdMiddleware
             await _next(context).ConfigureAwait(false);
         }
     }
+
+    /// <summary>Checks the complete client value against the bounded ASCII header alphabet.</summary>
+    /// <param name="value">The untrusted header value.</param>
+    /// <returns>Whether every character is safe to echo into headers and logging scopes.</returns>
+    private static bool IsSafeCorrelationId([NotNullWhen(true)] string? value)
+    {
+        if (value is null || value.Length is < 1 or > MaximumCorrelationIdLength)
+            return false;
+
+        foreach (var character in value)
+        {
+            if (character is not (>= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '_' or '-'))
+                return false;
+        }
+
+        return true;
+    }
+
 }

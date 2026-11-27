@@ -1,3 +1,4 @@
+using Bsft.Core.Tenancy;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +12,7 @@ namespace Bsft.Scheduling.EFCore;
 internal sealed class EFCoreJobStore : IJobStore
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ITenantScopeFactory? _tenantScopes;
     private readonly IJobRunMapper _mapper;
 
     /// <summary>
@@ -18,11 +20,16 @@ internal sealed class EFCoreJobStore : IJobStore
     /// </summary>
     /// <param name="scopeFactory">The service scope factory used to resolve the scoped DbContext.</param>
     /// <param name="mapper">Translates between the scheduler's runs and the persisted rows.</param>
-    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
-    public EFCoreJobStore(IServiceScopeFactory scopeFactory, IJobRunMapper mapper)
+    /// <param name="tenantScopes">
+    /// Opens the scope of an operation, with <see cref="ITenantScopeFactory.CreateScopeAsync"/>, while a background pass
+    /// works for a tenant (<see cref="BackgroundTenant.Current"/>), or <see langword="null"/> to open a plain scope.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="scopeFactory"/> or <paramref name="mapper"/> is null.</exception>
+    public EFCoreJobStore(IServiceScopeFactory scopeFactory, IJobRunMapper mapper, ITenantScopeFactory? tenantScopes = null)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _tenantScopes = tenantScopes;
     }
 
     /// <inheritdoc />
@@ -31,7 +38,7 @@ internal sealed class EFCoreJobStore : IJobStore
         if (run is null)
             throw new ArgumentNullException(nameof(run));
 
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IJobDbContext>();
 
         var entity = _mapper.ToEntity(run);
@@ -52,7 +59,7 @@ internal sealed class EFCoreJobStore : IJobStore
         if (run is null)
             throw new ArgumentNullException(nameof(run));
 
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IJobDbContext>();
 
         var jobName = run.JobName;
@@ -94,7 +101,7 @@ internal sealed class EFCoreJobStore : IJobStore
     /// <inheritdoc />
     public async Task<IReadOnlyList<JobRun>> ListClaimableAsync(DateTimeOffset now, int batchSize, CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IJobDbContext>();
 
         var nowUtc = now.UtcDateTime;
@@ -121,7 +128,7 @@ internal sealed class EFCoreJobStore : IJobStore
         if (owner is null)
             throw new ArgumentNullException(nameof(owner));
 
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IJobDbContext>();
 
         var nowUtc = now.UtcDateTime;
@@ -168,11 +175,16 @@ internal sealed class EFCoreJobStore : IJobStore
         if (run is null)
             throw new ArgumentNullException(nameof(run));
 
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IJobDbContext>();
 
         var settledAtUtc = settledAt.UtcDateTime;
         var nextToken = Guid.NewGuid();
+        // One read of the result, so a job that records again while the run settles cannot pair the
+        // schema of one result with the JSON of another.
+        var recorded = run.Result;
+        var resultSchema = recorded?.Schema;
+        var result = _mapper.ToResultJson(recorded);
 
         // The SetProperty chain is written out here rather than shared with RetryAsync's: ExecuteUpdate
         // parses the argument as an expression tree, and a delegate invoked inside it is not something
@@ -182,6 +194,8 @@ internal sealed class EFCoreJobStore : IJobStore
                 s => s
                     .SetProperty(e => e.Status, status)
                     .SetProperty(e => e.SettledAt, (DateTime?)settledAtUtc)
+                    .SetProperty(e => e.ResultSchema, resultSchema)
+                    .SetProperty(e => e.Result, result)
                     .SetProperty(e => e.LeaseOwner, (string?)null)
                     .SetProperty(e => e.LeaseExpiresAt, (DateTime?)null)
                     .SetProperty(e => e.ConcurrencyToken, nextToken),
@@ -195,7 +209,7 @@ internal sealed class EFCoreJobStore : IJobStore
         if (run is null)
             throw new ArgumentNullException(nameof(run));
 
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IJobDbContext>();
 
         var dueAtUtc = dueAt.UtcDateTime;
@@ -244,7 +258,7 @@ internal sealed class EFCoreJobStore : IJobStore
     /// <inheritdoc />
     public async Task<bool> CancelAsync(long id, CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IJobDbContext>();
 
         // Only a run that has not started may be cancelled; deleting a running one would strand the
@@ -260,7 +274,7 @@ internal sealed class EFCoreJobStore : IJobStore
     /// <inheritdoc />
     public async Task<JobRun?> FindAsync(long id, CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IJobDbContext>();
 
         var entity = await db.JobRuns

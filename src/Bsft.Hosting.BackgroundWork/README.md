@@ -34,6 +34,11 @@ The types keep the namespaces they had in `Bsft.Hosting` (`Bsft.Hosting.Backgrou
 `Bsft.Hosting.BackgroundWork.DependencyInjection`, which is where the package conventions put a package's
 entry points; a host that used `using Bsft.Hosting.DependencyInjection;` for these calls adds that one using.
 
+A service that polls derives from `PollingBackgroundServiceBase` and writes one pass, `TryTickAsync`, which returns
+`true` when it did work (the next pass starts at once) and `false` otherwise (it waits `PollInterval`); the loop, the wait, the logging of a
+failed pass and the clean stop are the base's. Register it with `AddBsftGatedHostedService<T>()` to start it after the
+start gates.
+
 ## Configure
 
 | Option | Default | Effect |

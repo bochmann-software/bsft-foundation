@@ -4,7 +4,7 @@ using System.Diagnostics.Metrics;
 namespace Bsft.Idempotency.Diagnostics;
 
 /// <summary>
-/// The three counters this package publishes, on the shared instrumentation source.
+/// The counters this package publishes, on the shared instrumentation source.
 /// </summary>
 internal sealed class IdempotencyTelemetry : IIdempotencyTelemetry
 {
@@ -20,9 +20,13 @@ internal sealed class IdempotencyTelemetry : IIdempotencyTelemetry
     /// <summary>Requests refused because the first request under their key was still running.</summary>
     private const string InProgressMetric = "bsft.idempotency.in_progress";
 
+    /// <summary>Repeats whose stored response carried a secret that could not be replayed.</summary>
+    private const string WithheldMetric = "bsft.idempotency.withheld";
+
     private readonly Counter<long> _replayed;
     private readonly Counter<long> _conflicted;
     private readonly Counter<long> _inProgress;
+    private readonly Counter<long> _withheld;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="IdempotencyTelemetry"/> class.
@@ -38,6 +42,7 @@ internal sealed class IdempotencyTelemetry : IIdempotencyTelemetry
         _replayed = source.GetOrCreateCounter(ReplayedMetric);
         _conflicted = source.GetOrCreateCounter(ConflictedMetric);
         _inProgress = source.GetOrCreateCounter(InProgressMetric);
+        _withheld = source.GetOrCreateCounter(WithheldMetric);
     }
 
     /// <inheritdoc />
@@ -47,6 +52,7 @@ internal sealed class IdempotencyTelemetry : IIdempotencyTelemetry
         {
             IdempotencyAuditAction.Replayed => _replayed,
             IdempotencyAuditAction.KeyReused => _conflicted,
+            IdempotencyAuditAction.ResponseWithheld => _withheld,
             _ => _inProgress,
         };
 

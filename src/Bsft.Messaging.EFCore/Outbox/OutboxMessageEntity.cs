@@ -14,6 +14,13 @@ namespace Bsft.Messaging.EFCore.Outbox;
 /// </remarks>
 public sealed class OutboxMessageEntity : OutboxRow
 {
+    /// <summary>
+    /// The tenant the row belongs to. Mapped only under <c>UseTenantKeys</c>, where it is required and
+    /// leads the key; it is then filled from the scope that writes the row. Without tenant keys the
+    /// table has no such column.
+    /// </summary>
+    public string? TenantId { get; set; }
+
     /// <summary>The identity of the integration event, carried through to the consumer.</summary>
     public Guid EventId { get; set; }
 

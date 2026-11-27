@@ -9,10 +9,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The only Bsft reference, and the reason this package exists: PollLoop is the loop every
+    <!-- The only Bsft references (Bsft.Hosting.StartGates is itself only Bsft.Core), and the reason this package exists: PollLoop is the loop every
          purging package was copying, and Bsft.Core has no package references of its own, so a
          package that purges pays for the sweeper and for nothing else. -->
     <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
+    <ProjectReference Include="..\Bsft.Hosting.StartGates\Bsft.Hosting.StartGates.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -11,8 +11,18 @@ namespace Bsft.Messaging.EFCore.Inbox;
 /// </remarks>
 public sealed class InboxMessageEntity
 {
-    /// <summary>Auto-increment primary key.</summary>
+    /// <summary>
+    /// The primary key: auto-increment, or, under <c>UseTenantKeys</c>, a time-ordered id the client
+    /// creates, keyed together with <see cref="TenantId"/>.
+    /// </summary>
     public long Id { get; set; }
+
+    /// <summary>
+    /// The tenant the row belongs to. Mapped only under <c>UseTenantKeys</c>, where it is required and
+    /// leads the key; it is then filled from the scope that writes the row. Without tenant keys the
+    /// table has no such column.
+    /// </summary>
+    public string? TenantId { get; set; }
 
     /// <summary>The identity of the integration event, stable across every redelivery of it.</summary>
     public Guid EventId { get; set; }

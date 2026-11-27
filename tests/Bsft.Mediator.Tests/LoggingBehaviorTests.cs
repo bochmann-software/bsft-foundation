@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Xunit;
+using ManualTimestampProvider = Bsft.Tests.Shared.ManualTimestampProvider;
 
 namespace Bsft.Mediator.Tests;
 
@@ -10,6 +11,7 @@ public class LoggingBehaviorTests
 {
     private readonly ILogger<LoggingBehavior<TestCommand, string>> _logger;
     private readonly ICorrelationIdAccessor _correlationIdAccessor;
+    private readonly ManualTimestampProvider _clock = new();
     private readonly LoggingBehavior<TestCommand, string> _sut;
 
     public LoggingBehaviorTests()
@@ -17,7 +19,7 @@ public class LoggingBehaviorTests
         _logger = Substitute.For<ILogger<LoggingBehavior<TestCommand, string>>>();
         _correlationIdAccessor = Substitute.For<ICorrelationIdAccessor>();
         _correlationIdAccessor.CorrelationId.Returns("test-correlation-id");
-        _sut = new LoggingBehavior<TestCommand, string>(_logger, _correlationIdAccessor);
+        _sut = new LoggingBehavior<TestCommand, string>(_logger, _clock, _correlationIdAccessor);
     }
 
     [Fact]
@@ -69,15 +71,56 @@ public class LoggingBehaviorTests
     [Fact]
     public void Constructor_WithNullLogger_ThrowsArgumentNullException()
     {
-        var act = () => new LoggingBehavior<TestCommand, string>(null!, _correlationIdAccessor);
+        var act = () => new LoggingBehavior<TestCommand, string>(null!, _clock, _correlationIdAccessor);
 
         act.Should().Throw<ArgumentNullException>().WithParameterName("logger");
     }
 
     [Fact]
+    public void Constructor_WithNullClock_ThrowsArgumentNullException()
+    {
+        var act = () => new LoggingBehavior<TestCommand, string>(_logger, null!, _correlationIdAccessor);
+
+        act.Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
+    }
+
+    [Fact]
+    public async Task HandleAsync_OnSuccess_LogsTheDurationTheInjectedClockMeasured()
+    {
+        var logger = new RecordingLogger<LoggingBehavior<TestCommand, string>>();
+        var sut = new LoggingBehavior<TestCommand, string>(logger, _clock, _correlationIdAccessor);
+
+        await sut.HandleAsync(new TestCommand("test"), () =>
+        {
+            _clock.Advance(TimeSpan.FromMilliseconds(250));
+
+            return Task.FromResult("ok");
+        });
+
+        logger.Messages.Should().Contain(message => message.EndsWith("Handled TestCommand in 250ms", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task HandleAsync_OnFailure_LogsTheDurationTheInjectedClockMeasured()
+    {
+        var logger = new RecordingLogger<LoggingBehavior<TestCommand, string>>();
+        var sut = new LoggingBehavior<TestCommand, string>(logger, _clock, _correlationIdAccessor);
+
+        var act = () => sut.HandleAsync(new TestCommand("test"), () =>
+        {
+            _clock.Advance(TimeSpan.FromMilliseconds(75));
+
+            throw new InvalidOperationException("boom");
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        logger.Messages.Should().Contain(message => message.EndsWith("Failed TestCommand after 75ms", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HandleAsync_WithoutCorrelationIdAccessor_UsesPlaceholder()
     {
-        var sut = new LoggingBehavior<TestCommand, string>(_logger);
+        var sut = new LoggingBehavior<TestCommand, string>(_logger, _clock);
         var command = new TestCommand("test");
 
         var result = await sut.HandleAsync(command, () => Task.FromResult("ok"));
@@ -97,7 +140,7 @@ public class LoggingBehaviorTests
         // The mediator closes the pipeline over ICommand<TResult>, so a behavior that logged its own
         // type parameter would give every command of one result type the same, useless name.
         var logger = new RecordingLogger<LoggingBehavior<ICommand<string>, string>>();
-        var sut = new LoggingBehavior<ICommand<string>, string>(logger, _correlationIdAccessor);
+        var sut = new LoggingBehavior<ICommand<string>, string>(logger, _clock, _correlationIdAccessor);
 
         await sut.HandleAsync(new TestCommand("test"), () => Task.FromResult("ok"));
 
@@ -114,7 +157,7 @@ public class LoggingBehaviorTests
         var logger = new RecordingLogger<LoggingBehavior<TestCommand, string>>();
         var accessor = Substitute.For<ICorrelationIdAccessor>();
         accessor.CorrelationId.Returns(correlationId);
-        var sut = new LoggingBehavior<TestCommand, string>(logger, accessor);
+        var sut = new LoggingBehavior<TestCommand, string>(logger, _clock, accessor);
 
         await sut.HandleAsync(new TestCommand("test"), () => Task.FromResult("ok"));
 
@@ -130,7 +173,7 @@ public class LoggingBehaviorTests
         var logger = new RecordingLogger<LoggingBehavior<TestCommand, string>>();
         var accessor = Substitute.For<ICorrelationIdAccessor>();
         accessor.CorrelationId.Returns("abc\r\nHandled Something");
-        var sut = new LoggingBehavior<TestCommand, string>(logger, accessor);
+        var sut = new LoggingBehavior<TestCommand, string>(logger, _clock, accessor);
 
         await sut.HandleAsync(new TestCommand("test"), () => Task.FromResult("ok"));
 

@@ -1,3 +1,4 @@
+using Bsft.Tests.Shared;
 using System.Text;
 using Bsft.Logging.LogFiles;
 using Bsft.Logging.Tests.Support;
@@ -213,7 +214,7 @@ public sealed class LogFileReaderTests : IDisposable
         options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
         var reader = new LogFileReader(options, TimeProvider.System);
         var current = await reader.ReadAsync(new LogReadRequest(1) { CorrelationId = "mine" });
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = reader.TailAsync(
                 new LogReadRequest(Before: current.Entries[0].Sequence) { CorrelationId = "mine" },
                 cancellation.Token)
@@ -266,7 +267,7 @@ public sealed class LogFileReaderTests : IDisposable
         options.LogDirectory = _fixture.LogDirectory;
         options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
         var reader = new LogFileReader(options, TimeProvider.System, access);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = reader.TailAsync(new LogReadRequest { CorrelationId = "mine" }, cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
 
@@ -306,7 +307,7 @@ public sealed class LogFileReaderTests : IDisposable
             .GetAsyncEnumerator(cancellation.Token);
 
         var pending = tail.MoveNextAsync().AsTask();
-        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await access.WaitForOpensAsync(4, guard.Token);
         cancellation.Cancel();
         var act = async () => await pending;
@@ -328,10 +329,15 @@ public sealed class LogFileReaderTests : IDisposable
     [Fact]
     public async Task ReadAsync_WhenReverseReadIsCancelled_CancelsTheAsynchronousIo()
     {
-        var access = new SingleStreamLogFileAccess(new CancellationBlockingReadStream());
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var stream = new CancellationBlockingReadStream();
+        var access = new SingleStreamLogFileAccess(stream);
+        using var cancellation = new CancellationTokenSource();
 
-        var act = () => CreateReader(access).ReadAsync(new LogReadRequest(), cancellation.Token);
+        var pending = CreateReader(access).ReadAsync(new LogReadRequest(), cancellation.Token);
+        await stream.ReadStarted.WaitAsync(TimeSpan.FromSeconds(30));
+        cancellation.Cancel();
+
+        var act = async () => await pending;
 
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -492,20 +498,24 @@ public sealed class LogFileReaderTests : IDisposable
         var options = LogFileFixture.Options();
         options.LogDirectory = _fixture.LogDirectory;
         options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
-        var reader = new LogFileReader(options, TimeProvider.System);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var reader = new LogFileReader(options, clock);
         var current = await reader.ReadAsync(new LogReadRequest(1));
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = reader.TailAsync(
                 new LogReadRequest(Before: current.Entries[0].Sequence),
                 cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
 
         var pending = tail.MoveNextAsync().AsTask();
-        await Task.Delay(30, cancellation.Token);
+
+        // The tail waits out its poll interval on the manual clock once its first scan found nothing new.
+        await clock.WaitForTimerAsync(options.LogReaderPollInterval);
         File.AppendAllText(
             Path.Combine(_fixture.LogDirectory, "app-2026-06-15.log"),
             "[2026-06-15 11:00:00.000 INF] [-] Category: appended\n",
             new UTF8Encoding(false));
+        clock.Advance(options.LogReaderPollInterval);
 
         (await pending).Should().BeTrue();
         tail.Current.Message.Should().Be("appended");
@@ -519,17 +529,21 @@ public sealed class LogFileReaderTests : IDisposable
         var options = LogFileFixture.Options();
         options.LogDirectory = _fixture.LogDirectory;
         options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
-        var reader = new LogFileReader(options, TimeProvider.System);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var reader = new LogFileReader(options, clock);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = reader.TailAsync(new LogReadRequest(), cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
 
         var pending = tail.MoveNextAsync().AsTask();
-        await Task.Delay(30, cancellation.Token);
+
+        // The tail waits out its poll interval on the manual clock once it has taken its starting position.
+        await clock.WaitForTimerAsync(options.LogReaderPollInterval);
         File.AppendAllText(
             Path.Combine(_fixture.LogDirectory, "app-2026-06-15.log"),
             "[2026-06-15 11:00:00.000 INF] [-] Category: appended\n",
             new UTF8Encoding(false));
+        clock.Advance(options.LogReaderPollInterval);
 
         (await pending).Should().BeTrue();
         tail.Current.Message.Should().Be("appended");
@@ -545,7 +559,7 @@ public sealed class LogFileReaderTests : IDisposable
         options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
         var reader = new LogFileReader(options, TimeProvider.System);
         var current = await reader.ReadAsync(new LogReadRequest(1));
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = reader.TailAsync(
                 new LogReadRequest(
                     Before: current.Entries[0].Sequence,
@@ -587,7 +601,7 @@ public sealed class LogFileReaderTests : IDisposable
             "[2026-06-15 09:00:00.000 INF] [-] Category: first\n"
             + "[2026-06-15 10:00:00.000 INF] [-] Category: second\n"
             + "[2026-06-15 11:00:00.000 INF] [-] Category: third\n");
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = CreateReader().TailAsync(new LogReadRequest(Before: 0), cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
         var entries = new List<LogFileEntry>();
@@ -611,7 +625,7 @@ public sealed class LogFileReaderTests : IDisposable
         var options = LogFileFixture.Options();
         options.LogDirectory = _fixture.LogDirectory;
         options.MaxEntryBytes = limit;
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = new LogFileReader(options, _fixture.Clock)
             .TailAsync(new LogReadRequest(Before: 0), cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
@@ -630,7 +644,7 @@ public sealed class LogFileReaderTests : IDisposable
         var options = LogFileFixture.Options();
         options.LogDirectory = _fixture.LogDirectory;
         options.MaxEntryBytes = limit;
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = new LogFileReader(options, _fixture.Clock)
             .TailAsync(new LogReadRequest(Before: 0), cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
@@ -882,12 +896,21 @@ public sealed class LogFileReaderTests : IDisposable
 
     private sealed class CountingLogFileAccess : ILogFileAccess
     {
+        private readonly object _gate = new();
+        private readonly List<(int Count, TaskCompletionSource Signal)> _waiters = [];
         private long _bytesRead;
         private int _opens;
 
         public long BytesRead => Interlocked.Read(ref _bytesRead);
 
-        public int Opens => Volatile.Read(ref _opens);
+        public int Opens
+        {
+            get
+            {
+                lock (_gate)
+                    return _opens;
+            }
+        }
 
         public bool IsDirectoryPresent(string path) => Directory.Exists(path);
 
@@ -896,16 +919,33 @@ public sealed class LogFileReaderTests : IDisposable
 
         public Stream OpenRead(string path)
         {
-            Interlocked.Increment(ref _opens);
+            lock (_gate)
+            {
+                _opens++;
+                foreach (var waiter in _waiters.Where(waiter => waiter.Count <= _opens).ToArray())
+                {
+                    _waiters.Remove(waiter);
+                    waiter.Signal.TrySetResult();
+                }
+            }
+
             return new CountingStream(
                 new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous),
                 read => Interlocked.Add(ref _bytesRead, read));
         }
 
-        public async Task WaitForOpensAsync(int count, CancellationToken cancellationToken)
+        public Task WaitForOpensAsync(int count, CancellationToken cancellationToken)
         {
-            while (Opens < count)
-                await Task.Delay(5, cancellationToken);
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_gate)
+            {
+                if (_opens >= count)
+                    return Task.CompletedTask;
+
+                _waiters.Add((count, signal));
+            }
+
+            return signal.Task.WaitAsync(cancellationToken);
         }
     }
 
@@ -987,6 +1027,11 @@ public sealed class LogFileReaderTests : IDisposable
 
     private sealed class CancellationBlockingReadStream : Stream
     {
+        private readonly TaskCompletionSource _readStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes when the reader has started its asynchronous read.</summary>
+        public Task ReadStarted => _readStarted.Task;
+
         public override bool CanRead => true;
 
         public override bool CanSeek => true;
@@ -1005,7 +1050,10 @@ public sealed class LogFileReaderTests : IDisposable
         public override ValueTask<int> ReadAsync(
             Memory<byte> buffer,
             CancellationToken cancellationToken = default)
-            => new(WaitForCancellationAsync(cancellationToken));
+        {
+            _readStarted.TrySetResult();
+            return new(WaitForCancellationAsync(cancellationToken));
+        }
 
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 

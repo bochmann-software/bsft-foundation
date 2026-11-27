@@ -45,8 +45,10 @@ public static class SagaEFCoreServiceCollectionExtensions
         // container from there. Constructing it inside the ISagaStore factory instead would leave
         // IEFCoreSagaStore unregistered, so the seam the README offers for replacing exactly the
         // relational store would resolve nothing and a replacement of it would change nothing.
-        services.TryAddSingleton<IEFCoreSagaStore>(
-            sp => new EFCoreSagaStore(sp.GetRequiredService<IServiceScopeFactory>()));
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IEFCoreSagaStore>(sp => new EFCoreSagaStore(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<TimeProvider>()));
 
         services.Replace(ServiceDescriptor.Singleton<ISagaStore>(
             sp => sp.GetRequiredService<IEFCoreSagaStore>()));
@@ -90,9 +92,11 @@ public static class SagaEFCoreServiceCollectionExtensions
 
         // Both relational stores go in under their own interfaces and the engine's contracts resolve
         // to whatever answers those seams, for the reason given in AddBsftSagaEFCore above.
+        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IEFCoreSagaStore>(sp => new EFCoreSagaStore(
             sp.GetRequiredService<IServiceScopeFactory>(),
-            window: sp.GetRequiredService<ISagaDbContextAccessor>()));
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ISagaDbContextAccessor>()));
 
         services.TryAddSingleton<IEFCoreSagaTimeoutStore>(sp => new EFCoreSagaTimeoutStore(
             sp.GetRequiredService<IServiceScopeFactory>(),

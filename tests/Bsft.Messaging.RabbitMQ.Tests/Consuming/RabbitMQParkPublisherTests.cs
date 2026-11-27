@@ -1,6 +1,7 @@
 using Bsft.Messaging.RabbitMQ.Consuming;
 using Bsft.Messaging.RabbitMQ.Tests.Fakes;
 using Bsft.Messaging.RabbitMQ.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using RabbitMQ.Client.Exceptions;
@@ -14,6 +15,9 @@ public class RabbitMQParkPublisherTests
     private readonly BsftRabbitMQOptions _options = TestOptions.Valid();
     private readonly FakeRabbitMQPublishChannelProvider _channelProvider = new();
 
+    // The clock the confirm window runs on. Nothing advances it unless a test means the window to close.
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     [Fact]
     public void A_null_dependency_is_rejected()
     {
@@ -22,16 +26,18 @@ public class RabbitMQParkPublisherTests
         var settings = Settings();
         var logger = NullLogger<RabbitMQParkPublisher>.Instance;
 
-        var withoutChannels = () => new RabbitMQParkPublisher(null!, mapper, topology, settings, logger);
-        var withoutMapper = () => new RabbitMQParkPublisher(_channelProvider, null!, topology, settings, logger);
-        var withoutTopology = () => new RabbitMQParkPublisher(_channelProvider, mapper, null!, settings, logger);
-        var withoutSettings = () => new RabbitMQParkPublisher(_channelProvider, mapper, topology, null!, logger);
-        var withoutLogger = () => new RabbitMQParkPublisher(_channelProvider, mapper, topology, settings, null!);
+        var withoutChannels = () => new RabbitMQParkPublisher(null!, mapper, topology, settings, _clock, logger);
+        var withoutMapper = () => new RabbitMQParkPublisher(_channelProvider, null!, topology, settings, _clock, logger);
+        var withoutTopology = () => new RabbitMQParkPublisher(_channelProvider, mapper, null!, settings, _clock, logger);
+        var withoutSettings = () => new RabbitMQParkPublisher(_channelProvider, mapper, topology, null!, _clock, logger);
+        var withoutClock = () => new RabbitMQParkPublisher(_channelProvider, mapper, topology, settings, null!, logger);
+        var withoutLogger = () => new RabbitMQParkPublisher(_channelProvider, mapper, topology, settings, _clock, null!);
 
         withoutChannels.Should().Throw<ArgumentNullException>();
         withoutMapper.Should().Throw<ArgumentNullException>();
         withoutTopology.Should().Throw<ArgumentNullException>();
         withoutSettings.Should().Throw<ArgumentNullException>();
+        withoutClock.Should().Throw<ArgumentNullException>();
         withoutLogger.Should().Throw<ArgumentNullException>();
     }
 
@@ -124,12 +130,20 @@ public class RabbitMQParkPublisherTests
         // A broker under a resource alarm keeps the socket alive and simply never confirms. Parking
         // is the terminal step of a strictly sequential consume loop, so a park that waits forever
         // livelocks the whole consumer rather than failing one message.
-        _options.PublisherConfirmTimeout = TimeSpan.FromMilliseconds(50);
+        // The window runs on the injected clock: it is still open a tick before the timeout and closes
+        // when the clock reaches it.
+        var timeout = TimeSpan.FromSeconds(5);
+        _options.PublisherConfirmTimeout = timeout;
         _channelProvider.Channel.PublishBehaviour = ct => Task.Delay(Timeout.Infinite, ct);
 
-        var preserved = await Publisher()
-            .TryPublishAsync(TestDeliveries.Delivery(1), "why")
-            .WaitAsync(TimeSpan.FromSeconds(30));
+        var park = Publisher().TryPublishAsync(TestDeliveries.Delivery(1), "why");
+
+        await _clock.WaitForTimerAsync(timeout);
+        _clock.Advance(timeout - TimeSpan.FromTicks(1));
+        park.IsCompleted.Should().BeFalse();
+
+        _clock.Advance(TimeSpan.FromTicks(1));
+        var preserved = await park.WaitAsync(TimeSpan.FromSeconds(30));
 
         preserved.Should().BeFalse();
     }
@@ -163,6 +177,7 @@ public class RabbitMQParkPublisherTests
             Mapper(),
             new RabbitMQTopology(_options),
             Settings(),
+            _clock,
             NullLogger<RabbitMQParkPublisher>.Instance);
 
     private RabbitMQMessageMapper Mapper() => new(Settings());

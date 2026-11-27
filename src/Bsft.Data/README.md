@@ -29,10 +29,24 @@ services.AddBsftDataMultiTenancy(configuration, cfg => cfg.ResolveFromHeader());
 // the framework's unit of work over your own context: IUnitOfWork + ITransactionalUnitOfWork
 services.AddBsftDataUnitOfWork<AppDbContext>();
 
+// or, for several module contexts over one database: one transaction per scope on one shared
+// connection, which every context configured with UseBsftSharedTransaction joins
+services.AddBsftDataSharedTransaction(_ => new NpgsqlConnection(connectionString));
+services.AddDbContext<CatalogDbContext>((sp, options) => options
+    .UseBsftSharedTransaction(sp, (o, connection) => o.UseNpgsql(connection)));
+
 // hand out a tenant identifier nothing else uses, and take it back again
 services.AddBsftSandboxTenants();
 services.AddSingleton<ISandboxTenantRegistry, MyRegistry>();   // required, and yours
+
+// keyset (cursor) paging for large listings: IKeysetPageReader and IKeysetCursorSerializer
+services.AddBsftDataKeysetPaging();
 ```
+
+Keyset paging is separate from the query filtering because a keyset listing has a fixed order and no
+declared filter surface. It reads the page after an opaque, versioned and checksummed cursor with a
+provider-neutral `WHERE (key > @key) OR (key = @key AND id > @id)` and `ORDER BY key, id`; see the
+keyset section of the topic page.
 
 Each of the three registers the relational-model warm-up as well; a host that uses EF Core without
 any of them adds it on its own with `services.AddBsftDataModelWarmup()`. It builds the
@@ -98,7 +112,9 @@ teardown removes the registry entry plus whatever each registered `ISandboxTenan
 | --- | --- | --- |
 | `BsftDataOptions.MultiTenancy.HeaderName` | `"X-Tenant-Id"` | The request header `HeaderTenantResolver` reads the tenant from. |
 | `BsftDataOptions.MultiTenancy.ClaimType` | `"tenant_id"` | The claim type `ClaimTenantResolver` reads the tenant from. |
+| `BsftDataOptions.SharedTransaction.IsolationLevel` | `Unspecified` | The isolation level the shared transaction's outermost unit begins with; `Unspecified` leaves it to the provider. |
 | `BsftDataOptions.ShouldWarmRelationalModels` | `true` | Builds each relational context type's relational model as its first instance initializes, instead of lazily by its first command. `false` keeps EF Core's lazy build. |
+| `BsftDataOptions.KeysetPaging.MaxPageSize` | `100` | The largest keyset page; a larger page size is clamped to it. From 1 to `int.MaxValue - 1`, validated on start. |
 
 Both defaults are `DataDefaults.TenantHeaderName` and `DataDefaults.TenantClaimType`, so the
 authentication stack and the resolver name the same claim without repeating the literal.
@@ -127,6 +143,10 @@ durable remembers it was given away — and each `ISandboxTenantCleanup` removes
 when a sandbox is taken away. `ISearchScopeProvider` supplies the tenant and org-unit scope a search
 is narrowed to and has no package default: this package does not reference `Bsft.Organization`, so a
 host declaring a scoped search group registers one, and startup says so when none is there.
+`ITransactionConflictClassifier` tells the shared transaction which provider failures are a conflict
+with a concurrent transaction, so `[Retryable]` re-runs the whole unit; `Bsft.Data.Postgres` registers
+the PostgreSQL one, and every registered classifier is asked. `ITransactionAbortProbe` asks the store
+before the outermost commit whether it already aborted the transaction. A scope runs one unit at a time.
 `IDataTelemetry` receives the search metrics and is registered with `TryAdd`, so a host's own
 registration wins. `QueryConfigurationBase<TEntity, TDto>` is the extension point an application
 writes against: one subclass per resource, discovered by the assembly scan.

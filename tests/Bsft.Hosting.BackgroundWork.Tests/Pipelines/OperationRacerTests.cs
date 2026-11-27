@@ -156,7 +156,6 @@ public sealed class OperationRacerTests
             {
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
-                await Task.Delay(10);
             }
 
             GC.Collect();

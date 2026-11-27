@@ -1,4 +1,5 @@
 using Bsft.Localization.Seeding;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -124,17 +125,32 @@ public static class LocalizationServiceCollectionExtensions
         // scoped state the tenant middleware writes onto that request's scope.
         services.AddHttpContextAccessor();
 
+        // One chain for everything that resolves a key: the localizers and the culture-explicit lookup
+        // read through the registered instance, so they cannot differ in what a key resolves to.
+        services.TryAddSingleton<ITranslationChain, TranslationChain>();
+
         // Registered by its own type first, so that both the localizer factory and the bundle
         // reader are the same instance and a host replacing IStringLocalizerFactory with one of its
-        // own still leaves the bundle endpoints something to read.
-        services.TryAddSingleton<BsftStringLocalizerFactory>();
+        // own still leaves the bundle endpoints something to read. Built through the internal
+        // constructor, over the registered chain, so that the localizers share it with the lookup.
+        services.TryAddSingleton(sp => new BsftStringLocalizerFactory(
+            sp.GetRequiredService<ITranslationChain>(),
+            sp.GetRequiredService<TranslationSeed>(),
+            sp.GetRequiredService<IMemoryCache>()));
         services.AddSingleton<IStringLocalizerFactory>(sp => sp.GetRequiredService<BsftStringLocalizerFactory>());
         services.TryAddSingleton<ITranslationBundleReader>(
             sp => sp.GetRequiredService<BsftStringLocalizerFactory>().CreateBundleReader());
 
-        // Subscribe to TranslationsUpdatedEvent to invalidate cache
+        // The culture-explicit lookup keeps its misses in a cache of its own, so the shared memory
+        // cache never grows by a key that does not exist.
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<ITranslationMissCache, TranslationMissCache>();
+        services.TryAddSingleton<ITranslationLookup, TranslationLookup>();
+
+        // Subscribe to TranslationsUpdatedEvent to invalidate cache, the miss cache included
         services.AddSingleton<TranslationCacheInvalidator>();
         services.AddHostedService<TranslationCacheInvalidatorHostedService>();
+        services.AddHostedService<TranslationMissCacheSubscriber>();
 
         return services;
     }

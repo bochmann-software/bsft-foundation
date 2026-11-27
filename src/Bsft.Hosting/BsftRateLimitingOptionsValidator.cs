@@ -23,6 +23,14 @@ internal sealed class BsftRateLimitingOptionsValidator : IValidateOptions<BsftRa
 
         var failures = new List<string>();
 
+        if (options.CustomPartitionKeyPrefix is null)
+            failures.Add($"{BsftRateLimitingOptions.SectionName}:CustomPartitionKeyPrefix must not be null.");
+
+        ValidateWindow(BsftRateLimitingOptions.SectionName, options.Window, options.WindowSeconds, failures);
+
+        if (options.GlobalLimiter is { } global)
+            ValidateLimiter(options, $"{BsftRateLimitingOptions.SectionName}:GlobalLimiter", global, failures);
+
         foreach (var (policyName, policy) in options.Policies)
             ValidatePolicy(options, policyName, policy, failures);
 
@@ -88,8 +96,28 @@ internal sealed class BsftRateLimitingOptionsValidator : IValidateOptions<BsftRa
         RequireAtLeastOne(failures, $"{path}:TokensPerPeriod", limiter.TokensPerPeriod, limiter.Kind == RateLimiterKind.TokenBucket);
         RequireAtLeastOne(failures, $"{path}:RetryAfterSeconds", limiter.RetryAfterSeconds ?? 1, applies: true);
 
+        if (limiter.Kind != RateLimiterKind.Concurrency)
+            ValidateWindow(path, limiter.Window, limiter.WindowSeconds, failures);
+
         if (limiter.QueueLimit < 0)
             failures.Add($"{path}:QueueLimit must not be negative.");
+    }
+
+    /// <summary>Collects the failures of a window given as a time span next to one given in seconds.</summary>
+    /// <param name="path">The configuration path of the member's owner.</param>
+    /// <param name="window">The time span, or <see langword="null"/> when it is not set.</param>
+    /// <param name="windowSeconds">The seconds.</param>
+    /// <param name="failures">Receives the failures.</param>
+    private static void ValidateWindow(
+        string path, TimeSpan? window, int windowSeconds, List<string> failures)
+    {
+        if (window is not { } value)
+            return;
+
+        if (value < TimeSpan.FromSeconds(1))
+            failures.Add($"{path}:Window must be at least one second.");
+        else if (windowSeconds != BsftRateLimitingOptions.DefaultWindowSeconds && value != TimeSpan.FromSeconds(windowSeconds))
+            failures.Add($"{path}:Window ({value}) and WindowSeconds ({windowSeconds}) disagree; set one of them.");
     }
 
     /// <summary>Collects the failures of a limiter's partition.</summary>

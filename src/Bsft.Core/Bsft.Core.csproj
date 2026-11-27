@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Version>$(BsftFoundationVersion)</Version>
-    <Description>BSFT Framework core: Exceptions, Validation, Unit type, closure calculator</Description>
+    <Description>BSFT Framework core: Exceptions, Validation, Unit type, closure calculator, subject data erasure contract (ISubjectDataEraser)</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Data\*.txt" LogicalName="Bsft.Core.Data.%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

@@ -3,6 +3,7 @@ using Bsft.Core;
 using Bsft.Instrumentation;
 using Bsft.Instrumentation.DependencyInjection;
 using Bsft.Mediator.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -12,6 +13,7 @@ namespace Bsft.Mediator.Tests;
 public sealed class MediatorTelemetryTests : IDisposable
 {
     private readonly ServiceProvider _provider;
+    private readonly ManualTimestampProvider _clock = new();
     private readonly MediatorTelemetry _telemetry;
 
     public MediatorTelemetryTests()
@@ -19,14 +21,36 @@ public sealed class MediatorTelemetryTests : IDisposable
         _provider = new ServiceCollection()
             .AddBsftInstrumentationSource(MediatorTelemetry.SourceName)
             .BuildServiceProvider();
-        _telemetry = new MediatorTelemetry(_provider.GetRequiredService<IInstrumentationSourceProvider>());
+        _telemetry = new MediatorTelemetry(_provider.GetRequiredService<IInstrumentationSourceProvider>(), _clock);
     }
 
     [Fact]
     public void Constructor_NullProvider_Throws()
     {
-        var act = () => new MediatorTelemetry(null!);
+        var act = () => new MediatorTelemetry(null!, _clock);
         act.Should().Throw<ArgumentNullException>().WithParameterName("sources");
+    }
+
+    [Fact]
+    public void Constructor_NullClock_Throws()
+    {
+        var act = () => new MediatorTelemetry(_provider.GetRequiredService<IInstrumentationSourceProvider>(), null!);
+        act.Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
+    }
+
+    [Fact]
+    public void Dispose_RecordsTheDurationTheInjectedClockMeasured()
+    {
+        using var capture = new TelemetryCapture(MediatorTelemetry.SourceName);
+
+        using (var scope = _telemetry.BeginRequest("CreateOrder", "MyApp.CreateOrder", null))
+        {
+            _clock.Advance(TimeSpan.FromMilliseconds(1500));
+            scope.Complete();
+        }
+
+        capture.Measurements.Should().ContainSingle(m => m.Instrument == "bsft.mediator.request.duration")
+            .Which.Value.Should().Be(1.5);
     }
 
     [Fact]
@@ -148,8 +172,15 @@ public sealed class MediatorTelemetryTests : IDisposable
     [Fact]
     public void Scope_NullTelemetry_Throws()
     {
-        var act = () => new RequestTelemetryScope(null!, null, "x");
+        var act = () => new RequestTelemetryScope(null!, _clock, null, "x");
         act.Should().Throw<ArgumentNullException>().WithParameterName("telemetry");
+    }
+
+    [Fact]
+    public void Scope_NullClock_Throws()
+    {
+        var act = () => new RequestTelemetryScope(_telemetry, null!, null, "x");
+        act.Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
     }
 
     [Fact]

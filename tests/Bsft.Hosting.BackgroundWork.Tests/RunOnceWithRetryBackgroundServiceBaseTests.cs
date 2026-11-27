@@ -197,7 +197,7 @@ public sealed class RunOnceWithRetryBackgroundServiceBaseTests
         // Since Microsoft.Extensions.Hosting 10, StartAsync runs the whole of ExecuteAsync on the
         // thread pool, so a stop right after the start can come before the first attempt. The test
         // waits for it rather than relying on the synchronous start of earlier versions.
-        SpinWait.SpinUntil(() => service.AttemptCount > 0, TimeSpan.FromSeconds(10)).Should().BeTrue();
+        await service.FirstAttempt.WaitAsync(TimeSpan.FromSeconds(30));
         await service.StopAsync(CancellationToken.None);
 
         service.AttemptCount.Should().Be(1);

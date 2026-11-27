@@ -59,6 +59,17 @@ must be positive. These are Polly's own rules, stated here so the failure lands 
 call — where the stack still names the client — rather than on the first request through it. A
 failure names the member and the offending value.
 
+## Which requests are retried
+
+A retry after a lost response runs the request again, so the pipeline retries a transient failure only
+when that is safe. GET, HEAD, OPTIONS and TRACE (safe) and PUT and DELETE (idempotent, RFC 9110
+section 9.2.2) are retried. POST, PATCH and any other method are retried only when the request carries
+an `Idempotency-Key` header (`ResilienceDefaults.IdempotencyKeyHeaderName`, the header
+`Bsft.Idempotency` reads), because the receiving side then replays the first outcome. To change that,
+assign `HttpRetryStrategyOptions.ShouldHandle` through
+`services.Configure<HttpStandardResilienceOptions>("<client>-standard", ...)`; it replaces this
+predicate, method gate included. The circuit breaker and the timeouts apply to every method.
+
 ## Stream retry
 
 `ResilientStreamExtensions.WithRetry` retries a stream, which the pipelines above cannot: they retry a
@@ -68,7 +79,11 @@ classifier and the budget are per call, so there is nothing container-wide to re
 ```csharp
 var tokens = ResilientStreamExtensions.WithRetry(
     ct => client.StreamCompletionAsync(prompt, ct),
-    options => options.MaxRetryAttempts = 5,
+    options =>
+    {
+        options.TimeProvider = timeProvider;
+        options.MaxRetryAttempts = 5;
+    },
     cancellationToken);
 
 await foreach (var token in tokens)
@@ -89,7 +104,7 @@ produced twice. `RestartFromStart` opts into restarting, and the overload taking
 | `BsftResilienceStreamOptions.UseJitter` | `true` | Scales the delay by a factor in `[0.5, 1)`. |
 | `BsftResilienceStreamOptions.ShouldRetry` | `IsTransientFailure` | The classifier. |
 | `BsftResilienceStreamOptions.PartialStreamPolicy` | `RethrowMidStream` | What a mid-stream failure does. |
-| `BsftResilienceStreamOptions.TimeProvider` | `TimeProvider.System` | What the backoff waits on. |
+| `BsftResilienceStreamOptions.TimeProvider` | none, required | What the backoff waits on: the host's registered `TimeProvider`, or a fake one in a test. `WithRetry` refuses to start without it. |
 
 The options are validated on the `WithRetry` call, before anything is enumerated. See
 [docs/resilience.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/resilience.md)

@@ -22,6 +22,8 @@ public sealed class BsftHealthCheckConfiguration
 
     internal List<DiskStorageRegistration> DiskStorageChecks { get; } = [];
 
+    internal bool IncludesStartGateCheck { get; private set; }
+
     /// <summary>
     /// Adds a health check that verifies an external service is reachable via HTTP.
     /// </summary>
@@ -50,6 +52,21 @@ public sealed class BsftHealthCheckConfiguration
             throw new ArgumentOutOfRangeException(nameof(minFreeMb), "Minimum free MB must be greater than zero.");
 
         DiskStorageChecks.Add(new DiskStorageRegistration(minFreeMb));
+        return this;
+    }
+
+    /// <summary>
+    /// Adds a health check that is unhealthy while a registered hosted work start gate is overdue, that is
+    /// while the gate says it has been pending for longer than expected.
+    /// </summary>
+    /// <returns>The current configuration instance for fluent chaining.</returns>
+    /// <remarks>
+    /// Opt-in. The gates are registered with <c>AddBsftHostedWorkStartGate</c>; one that does not implement
+    /// <c>IHostedWorkStartGateOverdueSignal</c> is never reported.
+    /// </remarks>
+    public BsftHealthCheckConfiguration AddHostedWorkStartGates()
+    {
+        IncludesStartGateCheck = true;
         return this;
     }
 }

@@ -68,10 +68,11 @@ public sealed class BsftResilienceStreamOptions
     public PartialStreamPolicy PartialStreamPolicy { get; set; } = PartialStreamPolicy.RethrowMidStream;
 
     /// <summary>
-    /// Gets or sets the time provider the backoff waits on. Defaults to
-    /// <see cref="System.TimeProvider.System"/>; a test substitutes a fake one so the waits are virtual.
+    /// Gets or sets the time provider the backoff waits on. Required: there is no default, so the caller
+    /// states which clock the backoff runs on (the host's registered <see cref="System.TimeProvider"/>, or a fake
+    /// one in a test so the waits are virtual) and <c>WithRetry</c> refuses to start without it.
     /// </summary>
-    public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+    public TimeProvider? TimeProvider { get; set; }
 
     /// <summary>
     /// The default classifier. Treats every failure as transient except

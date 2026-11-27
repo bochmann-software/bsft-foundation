@@ -48,6 +48,7 @@ pipeline is folded, so it holds however the packages were registered. One behavi
 | `MediatorConfiguration.ForwardNotifications()` | off | Publishes every notification onto the registered `INotificationForwarder`; `Bsft.Mediator.EventAggregator` supplies one. |
 | `MediatorConfiguration.UseDefaults()` | off | Registers the canonical cross-cutting chain from the referenced behavior packages, in the framework's order. Implies `EnableTracing()`. |
 | `MediatorConfiguration.SuppressDefaultBehavior(name)` | none | Drops one behavior from that chain; a name matching none throws. |
+| `MediatorConfiguration.ApplyTransactionToAllCommands()` | off | Makes every command transactional as if its handler carried `[Transactional]`; queries still need the attribute. Readable as `IMediatorTransactionPolicy`. |
 
 Validation: `MediatorStartupValidator` runs through `Bsft.Core`'s `IStartupValidator` and fails the host
 when a registered behavior cannot be constructed, when a request has no handler, or when it has more
@@ -55,7 +56,8 @@ than one — before the first request rather than on the first dispatch of the a
 second handler is as quiet a mistake as a missing one: dispatch resolves a single service, so the
 container decides which of them runs and the other never does. A command without a result is allowed
 one handler of each shape, `ICommandHandler<T>` and `ICommandHandler<T, Unit>`, because dispatch
-prefers the first and only falls back to the second.
+prefers the first and only falls back to the second. `TransactionPolicyStartupValidator` fails the host
+when `ApplyTransactionToAllCommands()` is on but `TransactionBehavior<,>` is not in the chain.
 
 ## Extend
 
@@ -69,7 +71,15 @@ through, registered here as a singleton and declared in the abstractions package
 satellite can take it without taking this one. It is a cache rather than a policy, so the
 registration is `TryAdd` and a host that supplies its own provider keeps it. The shipped
 `RequestMetadataProvider` is public, so that provider can decorate it rather than replace it
-outright.
+outright. `IRequestMetadata.IsCommand` is what the all-commands policies read.
+
+`IRescopingPipelineBehavior<TRequest, TResponse>` is a behavior the mediator hands the rest of the
+pipeline as an `IPipelineContinuation<TResponse>`: `RunAsync` runs it in the request's scope,
+`RunInNewScopeAsync` in a fresh scope that every registered `IRequestScopeSeed` seeds first and from
+which the later behaviors and the handler are resolved. The retry behavior of
+`Bsft.Resilience.Mediator` is the shipped one. `IRequestNesting`, registered scoped, holds the marks
+of an outer request that is retried or holds a transaction open; `IMediatorTransactionPolicy` exposes
+`ApplyTransactionToAllCommands()` to other packages.
 
 `IMediator` itself is replaceable but rarely should be: `Mediator` is `sealed`, and a wrapper that adds
 behaviour belongs in the pipeline instead. The four shipped behaviors are `sealed` for the same reason —

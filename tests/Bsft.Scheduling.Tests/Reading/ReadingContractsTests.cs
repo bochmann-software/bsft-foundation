@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Bsft.Scheduling.Reading;
+using Bsft.Scheduling.Tests.Support;
 using FluentAssertions;
 using Xunit;
 
@@ -60,6 +62,32 @@ public sealed class ReadingContractsTests
         summary.LeaseOwner.Should().Be("worker-2");
         summary.LeaseExpiresAt.Should().Be(Now.AddMinutes(-5));
         summary.SettledAt.Should().Be(Now);
+    }
+
+    /// <summary>A row without a result carries none, and its JSON has no result property at all.</summary>
+    [Fact]
+    public void JobRunSummary_WithoutResult_WritesNoResultProperty()
+    {
+        var summary = new JobRunSummary(
+            42, "nightly-import", Now, JobRunStatus.Completed, false, null, 1, null, null, Now);
+
+        summary.Result.Should().BeNull();
+        JsonSerializer.Serialize(summary, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            .Should().NotContain("result");
+    }
+
+    /// <summary>A recorded result is written as JSON beside its schema, not as an escaped string.</summary>
+    [Fact]
+    public void JobRunSummary_WithResult_WritesTheValueAsJson()
+    {
+        var summary = new JobRunSummary(
+            42, "mail-dispatch", Now, JobRunStatus.Completed, false, null, 1, null, null, Now)
+        {
+            Result = TestRunResults.Of("mail-dispatch/v1", """{"sent":118}"""),
+        };
+
+        JsonSerializer.Serialize(summary, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            .Should().Contain("\"result\":{\"schema\":\"mail-dispatch/v1\",\"value\":{\"sent\":118}}");
     }
 
     /// <summary>The arguments are what the second read adds to the first.</summary>

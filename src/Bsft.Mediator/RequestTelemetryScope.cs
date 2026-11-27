@@ -15,6 +15,7 @@ internal sealed class RequestTelemetryScope : IRequestTelemetryScope
     private const string OutcomeError = "error";
 
     private readonly MediatorTelemetry _telemetry;
+    private readonly TimeProvider _timeProvider;
     private readonly Activity? _activity;
     private readonly string _requestName;
     private readonly long _startTimestamp;
@@ -25,14 +26,16 @@ internal sealed class RequestTelemetryScope : IRequestTelemetryScope
     /// Initializes a new instance of the <see cref="RequestTelemetryScope"/> class.
     /// </summary>
     /// <param name="telemetry">The owning telemetry that records the measurements.</param>
+    /// <param name="timeProvider">The clock the dispatch's duration is measured on.</param>
     /// <param name="activity">The activity for the dispatch, or <see langword="null"/> when not sampled.</param>
     /// <param name="requestName">The request name used as the metric outcome tag.</param>
-    public RequestTelemetryScope(MediatorTelemetry telemetry, Activity? activity, string requestName)
+    public RequestTelemetryScope(MediatorTelemetry telemetry, TimeProvider timeProvider, Activity? activity, string requestName)
     {
         _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _activity = activity;
         _requestName = requestName;
-        _startTimestamp = Stopwatch.GetTimestamp();
+        _startTimestamp = _timeProvider.GetTimestamp();
     }
 
     /// <inheritdoc />
@@ -88,7 +91,7 @@ internal sealed class RequestTelemetryScope : IRequestTelemetryScope
 
         _disposed = true;
 
-        var elapsed = Stopwatch.GetElapsedTime(_startTimestamp);
+        var elapsed = _timeProvider.GetElapsedTime(_startTimestamp);
         _telemetry.Record(_requestName, _outcome, elapsed.TotalSeconds, _outcome == OutcomeError);
         _activity?.Dispose();
     }

@@ -71,6 +71,24 @@ public class TransactionDbContextValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_WhenTwoContextsShareTheAmbientTransaction_Succeeds()
+    {
+        // The shared transaction spans every enlisted context, so there is no context to choose.
+        var services = new ServiceCollection();
+        RegisterTransactionBehavior(services);
+        AddContext<TransactionTestDbContext>(services);
+        AddContext<SecondTransactionTestDbContext>(services);
+        services.AddScoped(_ => NSubstitute.Substitute.For<Bsft.Core.Persistence.IAmbientTransaction>());
+
+        var validator = Validator(services);
+
+        var result = await validator.ValidateAsync();
+
+        result.IsValid.Should().BeTrue();
+        result.Message.Should().Contain("shared transaction");
+    }
+
+    [Fact]
     public async Task ValidateAsync_WhenSingleContext_Succeeds()
     {
         var services = new ServiceCollection();

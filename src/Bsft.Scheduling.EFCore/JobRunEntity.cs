@@ -43,6 +43,14 @@ public sealed class JobRunEntity
     /// <summary>Gets or sets the UTC instant at which the run reached a terminal state.</summary>
     public DateTime? SettledAt { get; set; }
 
+    /// <summary>
+    /// Gets or sets the schema name of the result the job recorded, or <c>null</c> when it recorded none.
+    /// </summary>
+    public string? ResultSchema { get; set; }
+
+    /// <summary>Gets or sets the JSON text of the result the job recorded, or <c>null</c> when it recorded none.</summary>
+    public string? Result { get; set; }
+
     /// <summary>Gets or sets the optimistic concurrency token guarding the claim.</summary>
     public Guid ConcurrencyToken { get; set; }
 }

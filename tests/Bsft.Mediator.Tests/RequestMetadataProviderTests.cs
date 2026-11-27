@@ -1,4 +1,5 @@
 using Bsft.Mediator.DependencyInjection;
+using Bsft.Mediator.Tests.Fakes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -7,6 +8,26 @@ namespace Bsft.Mediator.Tests;
 
 public class RequestMetadataProviderTests
 {
+    [Theory]
+    [InlineData(typeof(TestCommand), true)]
+    [InlineData(typeof(TestVoidCommand), true)]
+    [InlineData(typeof(TestQuery), false)]
+    public void IsCommand_SaysWhetherTheRequestIsACommand(Type requestType, bool isCommand)
+    {
+        new RequestMetadataProvider().GetMetadata(requestType).IsCommand.Should().Be(isCommand);
+    }
+
+    [Theory]
+    [InlineData(typeof(TestCommand))]
+    [InlineData(typeof(TestVoidCommand))]
+    [InlineData(typeof(TestQuery))]
+    public void IsCommand_CachedPerType_AgreesWithTheDefaultOfTheInterface(Type requestType)
+    {
+        IRequestMetadata typeOnly = new TypeOnlyRequestMetadata(requestType);
+
+        new RequestMetadataProvider().GetMetadata(requestType).IsCommand.Should().Be(typeOnly.IsCommand);
+    }
+
     [Fact]
     public void GetMetadata_Instance_ReportsConcreteRequestType()
     {

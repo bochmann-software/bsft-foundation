@@ -1,6 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\PostgresTestServer.cs" Link="Shared\PostgresTestServer.cs" />
+    <Compile Include="..\Shared\PostgresFactAttribute.cs" Link="Shared\PostgresFactAttribute.cs" />
+    <Compile Include="..\Shared\PostgresTheoryAttribute.cs" Link="Shared\PostgresTheoryAttribute.cs" />
     <ProjectReference Include="..\..\src\Bsft.Data.Postgres\Bsft.Data.Postgres.csproj" />
+    <!-- Not referenced by the package under test: the shared-transaction scenarios run the mediator's
+         transaction and retry behaviors against a real server, which is the one place a serialization
+         failure is a real one. Coverage stays on Bsft.Data.Postgres. -->
+    <ProjectReference Include="..\..\src\Bsft.Mediator\Bsft.Mediator.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Resilience.Mediator\Bsft.Resilience.Mediator.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -9,5 +17,6 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
 </Project>

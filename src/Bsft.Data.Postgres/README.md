@@ -33,6 +33,22 @@ the index and the queries against it have to name the same one, and one instance
 makes that structural rather than a convention two files apart. The container receives a copy, so a
 mutation after the call cannot make the two disagree.
 
+The shared transaction of `Bsft.Data` on PostgreSQL — one transaction per scope across several module
+contexts over one database — takes two calls:
+
+```csharp
+services.AddBsftDataPostgresTransaction(connectionString);
+services.AddDbContext<CatalogDbContext>((sp, options) => options
+    .UseBsftSharedNpgsql(sp, npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "catalog")));
+```
+
+`AddBsftDataPostgresTransaction` registers `AddBsftDataSharedTransaction` over an
+`NpgsqlConnection` per scope (or over the connections a factory creates, for a host with an
+`NpgsqlDataSource`), classifies `40001` (serialization failure) and `40P01` (deadlock) as transaction
+conflicts, so `[Retryable]` re-runs the whole outermost unit on them, and registers an abort probe that
+asks PostgreSQL before every outermost commit whether it already aborted the transaction. See
+[docs/data.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/data.md#a-transaction-across-several-contexts).
+
 ## Configure
 
 `BsftDataPostgresOptions` has no `SectionName` and binds from no configuration section — see the

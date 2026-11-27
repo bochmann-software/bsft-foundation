@@ -56,20 +56,11 @@ internal sealed class ConfiguredRateLimitPolicies : IDisposable
     {
         ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-        var permitLimit = _options.PermitLimit;
-        var window = TimeSpan.FromSeconds(_options.WindowSeconds);
+        if (_options.EnableDefaultPolicy)
+            AddDefaultPolicy(limiterOptions);
 
-        limiterOptions.AddPolicy(
-            HostingDefaults.RateLimitingPolicyName,
-            context => RateLimitPartition.GetFixedWindowLimiter(
-                RateLimitPartitionKeys.ClientAddress(context),
-                _ => new FixedWindowRateLimiterOptions
-                {
-                    PermitLimit = permitLimit,
-                    Window = window,
-                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                    QueueLimit = 0
-                }));
+        if (_options.GlobalLimiter is { } global)
+            limiterOptions.GlobalLimiter = BuildGlobalLimiter(global);
 
         foreach (var (name, policy) in _options.Policies)
             limiterOptions.AddPolicy(name, BuildPolicy(policy));
@@ -82,6 +73,36 @@ internal sealed class ConfiguredRateLimitPolicies : IDisposable
                 TimeSpan.FromSeconds(_options.RetryAfterSeconds));
             limiterOptions.OnRejected = rejectionWriter.WriteAsync;
         }
+    }
+
+    /// <summary>Registers the default policy: a fixed window per client address, without a queue.</summary>
+    /// <param name="limiterOptions">ASP.NET Core's rate limiter options.</param>
+    private void AddDefaultPolicy(RateLimiterOptions limiterOptions)
+    {
+        var permitLimit = _options.PermitLimit;
+        var window = _options.EffectiveWindow;
+
+        limiterOptions.AddPolicy(
+            HostingDefaults.RateLimitingPolicyName,
+            context => RateLimitPartition.GetFixedWindowLimiter(
+                RateLimitPartitionKeys.ClientAddress(context),
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = permitLimit,
+                    Window = window,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 0
+                }));
+    }
+
+    /// <summary>Builds the limiter that covers every request: a chain of the one configured limiter.</summary>
+    /// <param name="global">The global limiter's options.</param>
+    /// <returns>The limiter, which the middleware's release disposes with the container.</returns>
+    private PartitionedRateLimiter<HttpContext> BuildGlobalLimiter(PolicyLimiterOptions global)
+    {
+        var policy = BuildPolicy(new RateLimitPolicyOptions { Limiters = { global } });
+
+        return PartitionedRateLimiter.Create<HttpContext, string>(policy.GetPartition);
     }
 
     /// <inheritdoc />

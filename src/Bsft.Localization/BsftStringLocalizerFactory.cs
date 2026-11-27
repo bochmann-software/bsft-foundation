@@ -14,11 +14,9 @@ namespace Bsft.Localization;
 /// </summary>
 public sealed class BsftStringLocalizerFactory : IStringLocalizerFactory
 {
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IHttpContextAccessor _requests;
+    private readonly ITranslationChain _chain;
     private readonly TranslationSeed _seed;
     private readonly IMemoryCache _cache;
-    private readonly BsftLocalizationOptions _localeOptions;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BsftStringLocalizerFactory"/> class.
@@ -30,10 +28,17 @@ public sealed class BsftStringLocalizerFactory : IStringLocalizerFactory
     /// <param name="localeOptions">The localization options containing locale settings.</param>
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     /// <remarks>
+    /// <para>
     /// The value is taken once, at construction: the factory is a singleton and the localizers it
     /// hands out are long-lived, so a later change to the section would reach some of them and not
     /// others. A locale setting that changed under a running application would also strand every
     /// cache entry resolved under the previous one.
+    /// </para>
+    /// <para>
+    /// A factory built this way owns a chain of its own, which is not the one
+    /// <see cref="ITranslationLookup"/> resolves through. <c>AddBsftLocalization</c> builds the factory
+    /// over the registered chain instead, so that the localizers and the lookup share it.
+    /// </para>
     /// </remarks>
     public BsftStringLocalizerFactory(
         IServiceScopeFactory scopeFactory,
@@ -41,14 +46,25 @@ public sealed class BsftStringLocalizerFactory : IStringLocalizerFactory
         TranslationSeed seed,
         IMemoryCache cache,
         IOptions<BsftLocalizationOptions> localeOptions)
+        // Kept for callers that construct the factory by hand: they have no registered chain, so the
+        // factory builds its own. The registration goes through the internal constructor.
+        : this(new TranslationChain(scopeFactory, requests, seed, cache, localeOptions), seed, cache)
     {
-        ArgumentNullException.ThrowIfNull(localeOptions);
+    }
 
-        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _requests = requests ?? throw new ArgumentNullException(nameof(requests));
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BsftStringLocalizerFactory"/> class over the
+    /// resolution chain the registered services share.
+    /// </summary>
+    /// <param name="chain">The chain every localizer this factory creates resolves through.</param>
+    /// <param name="seed">The seed translations, from the singleton the chain was built over.</param>
+    /// <param name="cache">The memory cache, from the singleton the chain was built over.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    internal BsftStringLocalizerFactory(ITranslationChain chain, TranslationSeed seed, IMemoryCache cache)
+    {
+        _chain = chain ?? throw new ArgumentNullException(nameof(chain));
         _seed = seed ?? throw new ArgumentNullException(nameof(seed));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
-        _localeOptions = localeOptions.Value ?? throw new ArgumentNullException(nameof(localeOptions));
     }
 
     /// <inheritdoc />
@@ -60,7 +76,7 @@ public sealed class BsftStringLocalizerFactory : IStringLocalizerFactory
     /// <summary>
     /// Creates the reader the bundle endpoints serve out of.
     /// </summary>
-    /// <returns>A reader over the same store, seeds and cache the localizers read.</returns>
+    /// <returns>A reader over the same chain, seeds and cache the localizers read.</returns>
     /// <remarks>
     /// The whole-bundle reads are on the localizer because they share the fallback chain with the
     /// per-key ones. Handing them out under a contract of their own is what keeps the endpoints from
@@ -68,8 +84,8 @@ public sealed class BsftStringLocalizerFactory : IStringLocalizerFactory
     /// </remarks>
     internal ITranslationBundleReader CreateBundleReader() => NewLocalizer();
 
-    /// <summary>Builds a localizer over this factory's dependencies.</summary>
+    /// <summary>Builds a localizer over this factory's chain.</summary>
     /// <returns>The new localizer.</returns>
     private BsftStringLocalizer NewLocalizer()
-        => new(_scopeFactory, _requests, _seed, _cache, _localeOptions);
+        => new(_chain, _seed, _cache);
 }

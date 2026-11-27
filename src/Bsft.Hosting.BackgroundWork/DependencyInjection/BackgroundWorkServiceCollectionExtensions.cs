@@ -1,4 +1,5 @@
 using Bsft.Hosting.BackgroundWork;
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -89,7 +90,7 @@ public static class BackgroundWorkServiceCollectionExtensions
         services.AddLogging();
         services.TryAddSingleton(TimeProvider.System);
 
-        services.AddHostedService<TService>();
+        services.AddBsftGatedHostedService<TService>();
 
         return services;
     }

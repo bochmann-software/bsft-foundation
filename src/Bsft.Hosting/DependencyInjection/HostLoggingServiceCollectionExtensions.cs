@@ -85,6 +85,7 @@ public static class HostLoggingServiceCollectionExtensions
         var options = new BsftHostLoggingOptions();
         Apply(options);
 
+        services.TryAddSingleton(TimeProvider.System);
         services.AddOptions<BsftHostLoggingOptions>().Configure(Apply).ValidateDataAnnotations().ValidateOnStart();
 
         var fileOptions = options.BuildFileOptions();
@@ -111,7 +112,8 @@ public static class HostLoggingServiceCollectionExtensions
                 // disposes only what it created itself, and the file provider drains its queue in
                 // Dispose. A pre-built instance would therefore never be drained, losing whatever
                 // was still queued at shutdown — in practice the shutdown-phase log lines.
-                builder.Services.AddSingleton<ILoggerProvider>(_ => new BsftFileLoggerProvider(fileOptions));
+                builder.Services.AddSingleton<ILoggerProvider>(provider => new BsftFileLoggerProvider(
+                    fileOptions, provider.GetRequiredService<TimeProvider>()));
             }
         });
 

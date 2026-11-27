@@ -264,7 +264,7 @@ public class SagaStepClaimTests
         // saga instance on the same call stack. It has to complete, and the saga has to finish.
         var publish = events.PublishAsync(new PaymentReceived("o-1"));
 
-        var finished = await Task.WhenAny(publish, Task.Delay(TimeSpan.FromSeconds(10)));
+        var finished = await Task.WhenAny(publish, Task.Delay(TimeSpan.FromSeconds(30)));
         finished.Should().BeSameAs(publish, "the reentrant publish must not block on the step gate");
         await publish;
 

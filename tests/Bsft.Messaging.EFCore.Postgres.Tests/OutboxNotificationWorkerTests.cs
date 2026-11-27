@@ -1,4 +1,5 @@
 using Bsft.Messaging.EFCore.Postgres.Tests.Fakes;
+using Bsft.Outbox.Postgres;
 using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.Hosting;
@@ -12,6 +13,10 @@ public class OutboxNotificationWorkerTests
 {
     private readonly RecordingLogger<OutboxNotificationWorker> _logger = new();
 
+    // The clock the reconnect delay runs on. It fires every wait at once, so a loop test reaches its
+    // next session without waiting out the delay.
+    private readonly RecordingTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static IOptions<BsftMessagingPostgresOptions> Options(TimeSpan? reconnectDelay = null) =>
         Microsoft.Extensions.Options.Options.Create(new BsftMessagingPostgresOptions
         {
@@ -19,8 +24,11 @@ public class OutboxNotificationWorkerTests
         });
 
     private OutboxNotificationWorker Worker(
-        FakeNotificationChannel channel, ScriptedOutboxProcessor processor, TimeSpan? reconnectDelay = null) =>
-        new(channel, processor, Options(reconnectDelay), _logger);
+        FakeNotificationChannel channel,
+        ScriptedOutboxProcessor processor,
+        TimeSpan? reconnectDelay = null,
+        TimeProvider? clock = null) =>
+        new(channel, processor, Options(reconnectDelay), new PostgresListenLoop(clock ?? _clock), _logger);
 
     [Fact]
     public async Task RunLoopAsync_ANotification_DrainsUntilAPassDeliversNothing()
@@ -98,18 +106,43 @@ public class OutboxNotificationWorkerTests
     }
 
     [Fact]
+    public async Task RunLoopAsync_TheReconnectDelay_RunsOnTheInjectedClock()
+    {
+        var delay = TimeSpan.FromMinutes(5);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var channel = new FakeNotificationChannel(notificationsPerSession: 0);
+        using var stop = new CancellationTokenSource();
+
+        var loop = Worker(channel, new ScriptedOutboxProcessor(), delay, clock).RunLoopAsync(stop.Token);
+        await clock.WaitForTimerAsync(delay);
+        channel.Sessions.Should().Be(1);
+
+        clock.Advance(delay - TimeSpan.FromTicks(1));
+        channel.Sessions.Should().Be(1, "the reconnect delay has not passed on the injected clock");
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        await clock.WaitForTimerAsync(delay);
+        channel.Sessions.Should().Be(2, "the reconnect delay passed on the injected clock");
+
+        await stop.CancelAsync();
+        await loop;
+    }
+
+    [Fact]
     public async Task TheWorker_RunsAsAHostedServiceAndStopsWithTheHost()
     {
         var processor = new ScriptedOutboxProcessor();
         var channel = new FakeNotificationChannel(notificationsPerSession: 0);
 
-        IHostedService worker = Worker(channel, processor, TimeSpan.FromMinutes(5));
+        // A clock nobody advances, so the loop parks in the reconnect delay until the host stops it.
+        IHostedService worker = Worker(
+            channel, processor, TimeSpan.FromMinutes(5), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         await worker.StartAsync(CancellationToken.None);
         // Since Microsoft.Extensions.Hosting 10, StartAsync runs the whole of ExecuteAsync on the
         // thread pool, so a stop right after the start can come before the first session. The test
         // waits for it rather than relying on the synchronous start of earlier versions.
-        await channel.FirstSessionStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        await channel.FirstSessionStarted.WaitAsync(TimeSpan.FromSeconds(30));
         await worker.StopAsync(CancellationToken.None);
 
         channel.Sessions.Should().BeGreaterThan(0);
@@ -124,10 +157,11 @@ public class OutboxNotificationWorkerTests
 
         var missing = new List<Func<OutboxNotificationWorker>>
         {
-            () => new OutboxNotificationWorker(null!, processor, Options(), _logger),
-            () => new OutboxNotificationWorker(channel, null!, Options(), _logger),
-            () => new OutboxNotificationWorker(channel, processor, null!, _logger),
-            () => new OutboxNotificationWorker(channel, processor, Options(), null!),
+            () => new OutboxNotificationWorker(null!, processor, Options(), new PostgresListenLoop(_clock), _logger),
+            () => new OutboxNotificationWorker(channel, null!, Options(), new PostgresListenLoop(_clock), _logger),
+            () => new OutboxNotificationWorker(channel, processor, null!, new PostgresListenLoop(_clock), _logger),
+            () => new OutboxNotificationWorker(channel, processor, Options(), null!, _logger),
+            () => new OutboxNotificationWorker(channel, processor, Options(), new PostgresListenLoop(_clock), null!),
         };
 
         foreach (var construct in missing)

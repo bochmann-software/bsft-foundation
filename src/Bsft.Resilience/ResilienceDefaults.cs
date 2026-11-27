@@ -21,4 +21,15 @@ public static class ResilienceDefaults
     /// </para>
     /// </remarks>
     public const string SuppressedFailureDataKey = "Bsft.Resilience.SuppressedFailure";
+
+    /// <summary>
+    /// The header that marks an unsafe request (POST, PATCH) as safe to retry, because the receiving
+    /// <c>Bsft.Idempotency</c> replays the first outcome for a repeated key.
+    /// </summary>
+    /// <remarks>
+    /// The same name as <c>IdempotencyDefaults.HeaderName</c> in <c>Bsft.Idempotency</c>, repeated as a literal:
+    /// that package takes the ASP.NET Core shared framework, which this client-side package keeps out of its
+    /// closure. A test pins the two together.
+    /// </remarks>
+    public const string IdempotencyKeyHeaderName = "Idempotency-Key";
 }

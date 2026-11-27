@@ -12,6 +12,7 @@ internal sealed class JobExecutionTelemetryScope : IJobExecutionTelemetryScope
     private const string OutcomeFailed = "failed";
 
     private readonly JobTelemetry _telemetry;
+    private readonly TimeProvider _timeProvider;
     private readonly Activity? _activity;
     private readonly string _jobName;
     private readonly long _startTimestamp;
@@ -25,15 +26,17 @@ internal sealed class JobExecutionTelemetryScope : IJobExecutionTelemetryScope
     /// Initializes a new instance of the <see cref="JobExecutionTelemetryScope"/> class.
     /// </summary>
     /// <param name="telemetry">The owning telemetry that records the measurement.</param>
+    /// <param name="timeProvider">The clock the execution's duration is measured on.</param>
     /// <param name="activity">The execution activity, or <see langword="null"/> when not sampled.</param>
     /// <param name="jobName">The job name used as the metric tag.</param>
     /// <exception cref="ArgumentNullException">Thrown when a required argument is null.</exception>
-    public JobExecutionTelemetryScope(JobTelemetry telemetry, Activity? activity, string jobName)
+    public JobExecutionTelemetryScope(JobTelemetry telemetry, TimeProvider timeProvider, Activity? activity, string jobName)
     {
         _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _activity = activity;
         _jobName = jobName ?? throw new ArgumentNullException(nameof(jobName));
-        _startTimestamp = Stopwatch.GetTimestamp();
+        _startTimestamp = _timeProvider.GetTimestamp();
     }
 
     /// <inheritdoc />
@@ -54,7 +57,7 @@ internal sealed class JobExecutionTelemetryScope : IJobExecutionTelemetryScope
         if (string.Equals(_outcome, OutcomeFailed, StringComparison.Ordinal))
             _activity?.SetStatus(ActivityStatusCode.Error);
 
-        var elapsed = Stopwatch.GetElapsedTime(_startTimestamp);
+        var elapsed = _timeProvider.GetElapsedTime(_startTimestamp);
         _telemetry.RecordExecution(_jobName, _outcome, elapsed.TotalSeconds);
         _activity?.Dispose();
     }

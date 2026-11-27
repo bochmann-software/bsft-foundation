@@ -13,7 +13,8 @@ namespace Bsft.Hosting;
 public static class HostingDefaults
 {
     /// <summary>
-    /// The name of the CORS policy that <c>AddBsftCors</c> registers and <c>UseBsftCors</c> applies.
+    /// The default name of the CORS policy that <c>AddBsftCors</c> registers and <c>UseBsftCors</c> applies,
+    /// overridable through <see cref="Cors.BsftCorsOptions.PolicyName"/>.
     /// </summary>
     public const string CorsPolicyName = "BsftCorsPolicy";
 

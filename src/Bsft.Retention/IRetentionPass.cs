@@ -2,7 +2,7 @@ namespace Bsft.Retention;
 
 /// <summary>
 /// One bounded batch of an application's retention rules: delete at most <c>batchSize</c> records
-/// that are older than <c>olderThan</c>, and say how many went.
+/// that have expired against the cutoff <c>olderThan</c>, and say how many went.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,7 +20,7 @@ namespace Bsft.Retention;
 public interface IRetentionPass
 {
     /// <summary>
-    /// Deletes at most <paramref name="batchSize"/> records older than <paramref name="olderThan"/>.
+    /// Deletes at most <paramref name="batchSize"/> records that have expired against <paramref name="olderThan"/>.
     /// </summary>
     /// <param name="batchSize">
     /// The most records this call may delete. An implementation must honour it: the cap is what keeps
@@ -28,10 +28,25 @@ public interface IRetentionPass
     /// also how the caller tells a drained backlog from a full batch.
     /// </param>
     /// <param name="olderThan">
-    /// The cutoff, computed by the caller from the configured retention and a <see cref="TimeProvider"/>.
-    /// A record at or after this instant must be left alone.
+    /// The cutoff, computed by the caller from a <see cref="TimeProvider"/>. What it means depends on the
+    /// mode, and the pass owns the comparison:
+    /// <list type="bullet">
+    /// <item><description>
+    /// Age mode (the default): the current time less the configured retention, computed once per sweep.
+    /// The pass purges records with <c>CreatedAt &lt; olderThan</c>; a record at or after it is left alone.
+    /// </description></item>
+    /// <item><description>
+    /// Absolute-expiry mode (<see cref="BsftRetentionOptions.UseAbsoluteExpiry"/>): the current time,
+    /// read again for every batch. The pass purges records with <c>ExpiresAt &lt;= olderThan</c>.
+    /// </description></item>
+    /// </list>
     /// </param>
-    /// <param name="cancellationToken">A cancellation token to observe. It is the host stopping.</param>
+    /// <param name="cancellationToken">
+    /// A cancellation token to observe. A stop lets the batch run to completion; the token is cancelled
+    /// only once the host's shutdown timeout has elapsed. Whatever the batch ends in after that, an
+    /// <see cref="OperationCanceledException"/> or a store's own exception for the cancelled command, the
+    /// sweeper reads as the shutdown cancellation and does not log as an error.
+    /// </param>
     /// <returns>
     /// How many records were deleted. A call that returns <paramref name="batchSize"/> is taken to
     /// mean more is waiting and the next batch follows immediately, subject to the configured pacing

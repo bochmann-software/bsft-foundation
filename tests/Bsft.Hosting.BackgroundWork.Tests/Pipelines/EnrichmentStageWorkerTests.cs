@@ -1,5 +1,6 @@
 using Bsft.Hosting.BackgroundWork.Pipelines;
 using Bsft.Hosting.BackgroundWork.Tests.Pipelines.Fakes;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -8,6 +9,40 @@ namespace Bsft.Hosting.BackgroundWork.Tests.Pipelines;
 
 public sealed class EnrichmentStageWorkerTests
 {
+    [Fact]
+    public async Task EnrichmentStageWorker_WithAPendingStartGate_EnrichesNothingUntilItOpens()
+    {
+        var gate = new ControllableStartGate();
+        using var host = new PipelineHost(withEnrichment: true, gate: gate);
+        await host.StartAsync();
+        await gate.Awaited;
+
+        host.EnrichmentStage.TryEnqueue(new SampleItem(1));
+
+        host.Enricher.Calls.Should().Be(0);
+        gate.Open();
+        await WaitForAsync(() => host.Enricher.Calls == 1);
+        await host.StopAsync();
+
+        host.Committer.Items.Should().ContainSingle().Which.Should().Be(new SampleItem(1, "enriched"));
+    }
+
+    [Fact]
+    public async Task EnrichmentStageWorker_StoppedWhileAStartGateIsPending_StopsAtOnceWithoutWaitingTheStopBudget()
+    {
+        var gate = new ControllableStartGate();
+        using var host = new PipelineHost(options => options.EnrichmentOnStopTimeout = TimeSpan.FromSeconds(15), withEnrichment: true, gate: gate);
+        await host.StartAsync();
+        await gate.Awaited;
+        host.EnrichmentStage.TryEnqueue(new SampleItem(1));
+
+        // The manual clock never moves, so only the services that never started can end this stop.
+        await host.StopAsync();
+
+        host.Enricher.Calls.Should().Be(0);
+        host.Committer.Items.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task EnrichmentStageWorker_WhenTheEnricherSucceeds_PassesTheEnrichedItemOn()
     {
@@ -321,5 +356,14 @@ public sealed class EnrichmentStageWorkerTests
         stage.Dispose();
 
         stage.Completion.IsCompletedSuccessfully.Should().BeTrue();
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!condition() && DateTime.UtcNow < deadline)
+            await Task.Delay(5);
+
+        condition().Should().BeTrue();
     }
 }

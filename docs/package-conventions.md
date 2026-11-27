@@ -21,7 +21,7 @@ A feature ships as a **family** of packages sharing a prefix:
 
 | Suffix | Contains | Depends on |
 | --- | --- | --- |
-| `Bsft.<Feature>.Abstractions` | The contract a consumer or a second implementation needs without the implementation: interfaces, contract records and enums, exceptions, defaults constants. **No** service registration, **no** options types, **no** live implementations (`DelegatingHandler`, middleware, stores). | Other `.Abstractions` only, plus BCL, `Microsoft.Extensions.*.Abstractions`, and `Bsft.Core`. `Bsft.Core` is on the list because it has no package references at all — it is exceptions, validation, the `Unit` type and pure BCL functions such as the closure calculator — so referencing it widens the closure by nothing, which is what the closure rule is protecting. |
+| `Bsft.<Feature>.Abstractions` | The contract a consumer or a second implementation needs without the implementation: interfaces, contract records and enums, exceptions, defaults constants. **No** service registration, **no** options types, **no** live implementations (`DelegatingHandler`, middleware, stores). | Other `.Abstractions` only, plus BCL, `Microsoft.Extensions.*.Abstractions`, and `Bsft.Core`. `Bsft.Core` is on the list because it has no package references at all — it is exceptions, validation, the `Unit` type, the `ISubjectDataEraser` contract and pure BCL functions such as the closure calculator — so referencing it widens the closure by nothing, which is what the closure rule is protecting. |
 | `Bsft.<Feature>` | The implementation and its DI entry point. | Its own `.Abstractions`, other Bsft packages, third-party libraries. |
 | `Bsft.<Feature>.EFCore` | Persistence: `I<Feature>DbContext`, entities, entity configurations, EF-backed stores. | `Bsft.<Feature>` (or its `.Abstractions`), `Microsoft.EntityFrameworkCore`. |
 | `Bsft.<Feature>.<Other>` | An adapter to another family (`Bsft.Auth.ApiKeys.Notifications`, `Bsft.Auditing.Idp`, `Bsft.Storage.S3`), or a live implementation of the family that a consumer must be able to take without the rest of it (`Bsft.Correlation.Http`). | Both families it bridges; a satellite of the second kind takes its own family's `.Abstractions` and whatever its one job needs. |
@@ -48,8 +48,8 @@ satellite, so its `AddBsft<Feature>` keeps registering what it always did.
 that concern's `IPipelineBehavior<,>` implementation, its opt-in marker, and its
 `AddBsft<X>Mediator` registration, and nothing else. **A concern package never
 contains a pipeline behavior.** `Bsft.Auditing.Mediator`, `Bsft.Auth.Mediator`,
-`Bsft.Caching.Mediator`, `Bsft.Organization.Mediator` and
-`Bsft.Resilience.Mediator` are the five, and the name is now uniform enough to
+`Bsft.Auth.ApiKeys.Mediator`, `Bsft.Caching.Mediator`, `Bsft.Organization.Mediator` and
+`Bsft.Resilience.Mediator` are the six, and the name is now uniform enough to
 state as a rule rather than as five coincidences.
 
 The rule exists for the closure: a behavior left inside its concern puts
@@ -65,7 +65,15 @@ nothing from `Bsft.Resilience` and references it not at all.
 This is checked mechanically by `bsft-behavior-in-mediator-package`, listed with
 the other conventions rules below.
 
-**A package that purges takes `Bsft.Retention`.** Its only framework reference is `Bsft.Core`, so a
+**A package that stores data per account contributes an `ISubjectDataEraser`.** The contract is in `Bsft.Core`, which
+every package already references, so no package takes a new reference to take part in the deletion of an account.
+The `Bsft.<Feature>.EFCore` package registers one with `TryAddEnumerable(ServiceDescriptor.Scoped<ISubjectDataEraser, ...>())`
+next to its stores, declares whether it `Revoke`s access or erases `Data`, deletes by `ExecuteDelete` (children before
+parents, idempotent, no authorization), and tests it against the real provider. Whoever deletes the account
+(`IDirectoryAccountAdministrationService` in `Bsft.Auth.Oidc.Organization`) runs every revoking eraser before any data
+eraser. A table nobody contributes for is listed as not erased in that service's documentation.
+
+**A package that purges takes `Bsft.Retention`.** Its only framework references are `Bsft.Core` and `Bsft.Hosting.StartGates` (itself only `Bsft.Core`), so a
 package that has to delete its own expired rows pays for the loop and for nothing else: it implements
 `IRetentionPass` and registers it with `AddBsftRetention<TPass>` instead of hosting a sweeper of its
 own. `Bsft.Retention` is what the 1.3.32 note below promised and 1.3.34 delivered.
@@ -360,9 +368,19 @@ the surface a host touches**, and nowhere else:
 
 ### Documented exceptions
 
-Two rules above have cases where following the letter makes the package worse.
-Both are closed lists: a package not named here follows the rule, and adding to
-either list means arguing the case in the pull request that adds it.
+Some rules above have cases where following the letter makes the package worse.
+Each case below is a closed list: a package not named here follows the rule, and
+adding to a list means arguing the case in the pull request that adds it.
+
+**The entry-point class of `Bsft.Templating.Notifications` is `RenderingServiceCollectionExtensions`, not
+`<Feature>ServiceCollectionExtensions` with the feature spelled out.** `TemplatingNotificationsServiceCollectionExtensions`
+is fifty characters against the forty of `type-name-length`, and the exemption for it would be a new entry in
+`.codecharter/config.yml`, which this repository decides not to add. The satellite rule of dropping the family prefix
+leaves `NotificationsServiceCollectionExtensions`, which is the simple name of `Bsft.Notifications`'s own class and
+fails `name-duplicate` (naming.md N2.5). No name that is derivable from the package, unique and within forty characters
+exists, so the class is named for what the bridge does; the extension methods keep the convention
+(`AddBsftTemplatingNotifications`), and a host never writes the class name. A later satellite does not follow this
+precedent unless it argues the same collision in its own pull request.
 
 **An options type that no configuration provider can supply carries no
 `SectionName` and no `IConfiguration` overload.** The Options-pattern
@@ -449,19 +467,57 @@ half the rule:
   restatement of the "no section" exceptions above: the type is fully bindable, it is the *fan-out*
   across instances that a single fixed section name cannot express, because named instances are a
   runtime decision (how many, and what they are called) that the framework has no other precedent for.
+- **The `Bsft.Templating` family binds its options per named profile, beside an unnamed default.**
+  It is a variant of the `Bsft.Chat` shape, and differs from it in one point that the entry argues:
+  a profile is a trust domain (its own member policy, functions, partial lookup and limits), and a
+  host that registers one profile at all registers the default one, so the default is not one name
+  among others but the profile without a name. `BsftTemplatingOptions` therefore binds
+  `Bsft:Templating` for the default profile and `Bsft:Templating:Profiles:{profile}` as named options
+  for a named one, over `TemplatingDefaults` and never over the default profile's section, so a limit
+  raised for the reports never reaches a tenant's mail profile. Both option shapes of
+  `AddBsftTemplating` exist with and without a leading `string profile`, beside two options-free
+  overloads that add to a profile without binding anything; two calls that bind options for one
+  profile fail start-up. `BsftTemplatingOptionsValidator` dispatches on `name`, `ValidateOnStart()`
+  runs once per profile, and consumers read `IOptionsMonitor<BsftTemplatingOptions>` by the profile's
+  name. `TemplateCacheOptions`, which size the container-wide cache, are read from the default
+  profile only. A satellite's options on a profile follow the same shape
+  (`Bsft:Templating:Profiles:{profile}:<Satellite>`). The options of a dialect are the exception: a dialect is a
+  container-wide singleton that sees no profile, so `BsftTemplatingScribanOptions` (`Bsft:Templating:Scriban`) holds for every
+  profile (specification 9.2 and 13).
+- **A satellite that adds to a `Bsft.Templating` profile extends `ITemplatingBuilder`, not
+  `IServiceCollection`.** The family's entry point returns its builder in the `IHttpClientBuilder`
+  shape, so what a satellite registers lands in the profile it is called on. Its methods are
+  unprefixed like the builder's own (`AddEscaper`, `AddFormattingFunctions`), because the builder
+  already carries `Bsft`, and live in `<Feature>TemplatingBuilderExtensions` in
+  `<Package>.DependencyInjection` (naming.md N5.8). A satellite that adds a container-wide service or
+  serves another package's seam (a dialect, a query executor) keeps an `IServiceCollection` entry point
+  in `<Feature>ServiceCollectionExtensions`, as `Bsft.Templating.Mustache`'s
+  `AddBsftTemplatingMustache` does.
 
 **A package whose sub-features are registered independently has one
 `<Aspect>ServiceCollectionExtensions` per such sub-feature**, all of them in its
 `DependencyInjection` namespace. `Bsft.Hosting` is the main case: a host calls
 `AddBsftCors` or `AddBsftSwagger` on its own as readily as it calls
 `AddBsftDefaults`, and each aspect owns its own options type, section and
-pipeline step. `Bsft.Data` (sandbox tenants), `Bsft.Chat` (display names) and
-`Bsft.Auth.TokenServer` (the scope catalog) each have one such second class. The
+pipeline step. `Bsft.Data` (sandbox tenants, keyset paging), `Bsft.Chat` (display names) and
+`Bsft.Auth.TokenServer` (the scope catalog) each have such further classes. The
 one-class rule holds everywhere else, including for a package that merely
 exposes several methods — `Bsft.Testing` keeps its four `AddBsftTest*` methods
 on one `TestingServiceCollectionExtensions` (and `Bsft.Auth.Testing` its three on
 `AuthTestingServiceCollectionExtensions`), because none of them is a separable
 feature with its own configuration.
+
+**An `.EFCore` package that binds a family to EF Core without owning a model
+holds no `DbContext` and registers without `<TContext>`.** The EFCore rows above
+describe persistence: a family stores its own rows, so the package carries the
+entities, their configurations and an `I<Feature>DbContext`, and the host names
+its context. `Bsft.Templating.EFCore` stores nothing. It executes queries a
+template composed over whatever `IQueryable` the host's model hands it, and the
+provider of that queryable is the context; there is no context for the package
+to declare and none for the host to name, so `AddBsftTemplatingEFCore` takes no
+type argument. It keeps the `.EFCore` suffix because it is still the family's EF
+Core binding and the one place `Microsoft.EntityFrameworkCore` enters the
+family (ADR-0014, specification section 2). This is the only such package.
 
 ### CodeCharter and the conventions
 
@@ -682,6 +738,17 @@ node .github/verify-structure.mjs --graph graph.json  # plus the four graph chec
 node --test '.github/structure/*.test.mjs'            # self-test, one case per rule
 ```
 
+### The exceptions check
+
+The `codecharter-exceptions` workflow (`.github/workflows/codecharter-exceptions.yml`, checker
+`.github/check-codecharter-exceptions.py`) fails a pull request that adds an exception to
+`.codecharter/config.yml`: an `exclude` path, an `ignore` entry, an `ignore` entry inside a `scopes` item, a
+`coverage.excluded-directories` path, or any change of `profiles` or `rules` (the rule sources). Removing entries is
+allowed. The job stays red until the exception is merged by an admin with the owner's approval. The checker is taken
+from the base commit, reads only the config's strict shape and exits 2 on anything else. Locally:
+`python3 -I .github/check-codecharter-exceptions.py --base origin/main`; its self-test is
+`python3 -I .github/check-codecharter-exceptions.test.py`.
+
 ## 5. Documentation
 
 Every package has a `README.md` in its folder, written from
@@ -695,7 +762,9 @@ and how do I wire it"; the topic page under `docs/` explains how it works.
 Every package also appears in [packages.md](packages.md), which maps each
 package to the topic page that documents it and to its entry point. A satellite
 package (`Bsft.Auditing.Oidc`, `Bsft.Auth.ApiKeys.Notifications`) is documented as
-a section on its family's topic page, never left undocumented. Every public type
+a section on its family's topic page, never left undocumented. A package that is in the
+solution but does not ship yet sets `<IsPackable>false</IsPackable>`, and its row's entry point says
+`(unreleased)`; a packable package's row never does, so the two switch together. Every public type
 carries an XML `<summary>`; the doc explains intent and constraints, not the
 signature.
 

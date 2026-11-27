@@ -64,8 +64,18 @@ public sealed class OutboxDrainer<TPayload> : IOutboxDrainer<TPayload>
     }
 
     /// <inheritdoc />
-    public async Task<int> DrainOnceAsync(CancellationToken cancellationToken = default)
+    public Task<int> DrainOnceAsync(CancellationToken cancellationToken = default) =>
+        DrainOnceAsync(static () => true, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<int> DrainOnceAsync(Func<bool> mayStartRow, CancellationToken cancellationToken = default)
     {
+        // A stop that came before the batch was leased leaves every row untouched and unleased.
+        ArgumentNullException.ThrowIfNull(mayStartRow);
+
+        if (!mayStartRow())
+            return 0;
+
         var now = _timeProvider.GetUtcNow();
         var leased = await _store
             .LeaseAsync(now, _options.LeaseDuration, _options.BatchSize, cancellationToken)
@@ -82,6 +92,19 @@ public sealed class OutboxDrainer<TPayload> : IOutboxDrainer<TPayload>
 
         foreach (var row in leased)
         {
+            // Past the stop no row is started: the one in flight finished on its own token, and the rest
+            // stay pending under the lease, which is exactly what the next instance claims. Applying them
+            // would only run effects whose processed mark the grace is about to cancel.
+            if (!mayStartRow())
+            {
+                _logger.LogInformation(
+                    "The outbox pass was told to stop after {AttemptedCount} of {LeasedCount} rows; the rest stay pending until their lease expires.",
+                    attempted,
+                    leased.Count);
+
+                break;
+            }
+
             // Past that instant the lease no longer belongs to this drainer. Applying anyway produces
             // an effect that can no longer be marked, so the next holder applies it a second time;
             // stopping instead leaves the rest of the batch pending under an expired lease, which is

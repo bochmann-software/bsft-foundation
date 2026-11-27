@@ -14,6 +14,7 @@
     <ProjectReference Include="..\Bsft.Messaging.Abstractions\Bsft.Messaging.Abstractions.csproj" />
     <ProjectReference Include="..\Bsft.Outbox\Bsft.Outbox.csproj" />
     <ProjectReference Include="..\Bsft.Instrumentation\Bsft.Instrumentation.csproj" />
+    <ProjectReference Include="..\Bsft.Hosting.StartGates\Bsft.Hosting.StartGates.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -173,4 +173,25 @@ public sealed class BsftRetentionOptionsValidatorTests
 
         act.Should().Throw<ArgumentNullException>().WithParameterName("options");
     }
+
+    [Fact]
+    public void Validate_ZeroRetentionPeriodInAbsoluteExpiryMode_Succeeds()
+    {
+        var result = Validate(o =>
+        {
+            o.UseAbsoluteExpiry = true;
+            o.RetentionPeriod = TimeSpan.Zero;
+        });
+
+        result.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_ZeroRetentionPeriodInAgeMode_IsRejected()
+    {
+        var result = Validate(o => o.RetentionPeriod = TimeSpan.Zero);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().ContainMatch("*RetentionPeriod*");
+    }
 }

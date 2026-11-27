@@ -1,3 +1,4 @@
+using Bsft.Data.MultiTenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
@@ -49,6 +50,7 @@ internal sealed class EFCoreIdempotencyStore : IIdempotencyStore
     private readonly IIdempotencyDbContext _db;
     private readonly BsftIdempotencyOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly ITenantContext? _tenantContext;
 
     /// <summary>The reservation this request staged but has not committed, in enlisted mode.</summary>
     private IdempotencyRecordEntity? _stagedClaim;
@@ -59,13 +61,21 @@ internal sealed class EFCoreIdempotencyStore : IIdempotencyStore
     /// <param name="db">The application's context, carrying the record set.</param>
     /// <param name="options">The mode, and the windows the records are written with.</param>
     /// <param name="timeProvider">The clock every expiry is judged against.</param>
-    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    /// <param name="tenantContext">
+    /// The request's tenant, which a tenant-keyed table (<c>UseTenantKeys</c>) is read and written
+    /// under; without one the tenant of the running background pass is used.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument but <paramref name="tenantContext"/> is null.</exception>
     public EFCoreIdempotencyStore(
-        IIdempotencyDbContext db, IOptions<BsftIdempotencyOptions> options, TimeProvider timeProvider)
+        IIdempotencyDbContext db,
+        IOptions<BsftIdempotencyOptions> options,
+        TimeProvider timeProvider,
+        ITenantContext? tenantContext = null)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc />
@@ -216,9 +226,25 @@ internal sealed class EFCoreIdempotencyStore : IIdempotencyStore
     /// endpoint is about to save.
     /// </remarks>
     private Task<IdempotencyRecordEntity?> FindAsync(string scope, string key, CancellationToken cancellationToken) =>
-        _db.IdempotencyRecords
+        Records()
             .AsNoTracking()
             .FirstOrDefaultAsync(entity => entity.Scope == scope && entity.Key == key, cancellationToken);
+
+    /// <summary>
+    /// The record set this request may see: the whole table, or under tenant keys the current tenant's
+    /// rows, so every statement the store makes carries the leading half of the key.
+    /// </summary>
+    /// <returns>The query.</returns>
+    /// <exception cref="InvalidOperationException">Thrown under tenant keys when the scope has no tenant.</exception>
+    private IQueryable<IdempotencyRecordEntity> Records()
+    {
+        if (!_db.IdempotencyRecords.IsTenantKeyed())
+            return _db.IdempotencyRecords;
+
+        var tenantId = _tenantContext.GetCurrentTenantId("IdempotencyRecords");
+
+        return _db.IdempotencyRecords.Where(entity => entity.TenantId == tenantId);
+    }
 
     /// <summary>
     /// This request's own reserved row, as the query the set-based writes are built on. It matches
@@ -230,7 +256,7 @@ internal sealed class EFCoreIdempotencyStore : IIdempotencyStore
     /// <param name="fingerprint">The digest the key was reserved with.</param>
     /// <returns>The query.</returns>
     private IQueryable<IdempotencyRecordEntity> Owned(string scope, string key, string fingerprint) =>
-        _db.IdempotencyRecords.Where(entity =>
+        Records().Where(entity =>
             entity.Scope == scope
             && entity.Key == key
             && entity.Fingerprint == fingerprint
@@ -245,6 +271,8 @@ internal sealed class EFCoreIdempotencyStore : IIdempotencyStore
     {
         var row = new IdempotencyRecordEntity
         {
+            // Stored only under tenant keys, where Records() has already refused a scope without one.
+            TenantId = _tenantContext.FindCurrentTenantId(),
             Scope = request.Scope,
             Key = request.Key,
             Fingerprint = request.Fingerprint,
@@ -300,7 +328,7 @@ internal sealed class EFCoreIdempotencyStore : IIdempotencyStore
         var lease = request.LeaseExpiresAt.UtcDateTime;
         var fingerprint = request.Fingerprint;
 
-        var reclaimed = await _db.IdempotencyRecords
+        var reclaimed = await Records()
             .Where(entity =>
                 entity.Scope == request.Scope && entity.Key == request.Key && entity.ExpiresAt <= now)
             .ExecuteUpdateAsync(

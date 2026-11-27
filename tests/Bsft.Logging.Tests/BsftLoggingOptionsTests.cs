@@ -33,6 +33,8 @@ public class BsftLoggingOptionsTests
             ["Bsft:Logging:MinimumLevel"] = "Warning",
             ["Bsft:Logging:LogReaderPollInterval"] = "00:00:02",
             ["Bsft:Logging:MaxEntryBytes"] = "4096",
+            ["Bsft:Logging:MaxRetainedFiles"] = "10",
+            ["Bsft:Logging:MaxTotalSizeMb"] = "100",
         });
 
         var services = new ServiceCollection();
@@ -47,6 +49,102 @@ public class BsftLoggingOptionsTests
         options.MinimumLevel.Should().Be(LogLevel.Warning);
         options.LogReaderPollInterval.Should().Be(TimeSpan.FromSeconds(2));
         options.MaxEntryBytes.Should().Be(4096);
+        options.MaxRetainedFiles.Should().Be(10);
+        options.MaxTotalSizeMb.Should().Be(100);
+    }
+
+    [Fact]
+    public void Defaults_SetNoFileCountOrTotalSizeLimit()
+    {
+        var options = new BsftLoggingOptions();
+
+        options.MaxRetainedFiles.Should().BeNull();
+        options.MaxTotalSizeMb.Should().BeNull();
+    }
+
+    [Fact]
+    public void AddBsftLogging_FileLimitsNotConfigured_LeavesThemUnlimited()
+    {
+        var services = new ServiceCollection();
+        services.AddBsftLogging(Configuration([]));
+
+        var options = services.BuildServiceProvider().GetRequiredService<IOptions<BsftLoggingOptions>>().Value;
+
+        options.MaxRetainedFiles.Should().BeNull();
+        options.MaxTotalSizeMb.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(0, 0)]
+    [InlineData(10, 100)]
+    [InlineData(1, 20)]
+    public void Validation_FileLimits_AcceptsUnlimitedAndSensibleValues(int? files, int? totalMb)
+    {
+        var options = new BsftLoggingOptions { MaxRetainedFiles = files, MaxTotalSizeMb = totalMb };
+
+        new BsftLoggingOptionsValidator().Validate(name: null, options).Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validation_NegativeMaxRetainedFiles_FailsNamingTheMember()
+    {
+        var result = new BsftLoggingOptionsValidator().Validate(name: null, new BsftLoggingOptions { MaxRetainedFiles = -1 });
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain(nameof(BsftLoggingOptions.MaxRetainedFiles)).And.Contain("-1");
+    }
+
+    [Fact]
+    public void Validation_NegativeMaxTotalSizeMb_FailsNamingTheMember()
+    {
+        var result = new BsftLoggingOptionsValidator().Validate(name: null, new BsftLoggingOptions { MaxTotalSizeMb = -5 });
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain(nameof(BsftLoggingOptions.MaxTotalSizeMb)).And.Contain("-5");
+    }
+
+    [Theory]
+    [InlineData(9)]
+    [InlineData(10)]
+    [InlineData(19)]
+    public void Validation_TotalSizeBelowTwiceTheFileSize_Fails(int totalMb)
+    {
+        var options = new BsftLoggingOptions { MaxFileSizeMb = 10, MaxTotalSizeMb = totalMb };
+
+        var result = new BsftLoggingOptionsValidator().Validate(name: null, options);
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain(nameof(BsftLoggingOptions.MaxTotalSizeMb))
+            .And.Contain(nameof(BsftLoggingOptions.MaxFileSizeMb));
+    }
+
+    [Fact]
+    public void Validation_TotalSizeTwiceTheFileSize_Succeeds()
+    {
+        var options = new BsftLoggingOptions { MaxFileSizeMb = 10, MaxTotalSizeMb = 20 };
+
+        new BsftLoggingOptionsValidator().Validate(name: null, options).Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AddBsftLogging_TotalSizeBelowFileSize_ThrowsInvalidOperationException()
+    {
+        var services = new ServiceCollection();
+
+        var act = () => services.AddBsftLogging(options => options.MaxTotalSizeMb = 5);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*MaxTotalSizeMb*");
+    }
+
+    [Fact]
+    public void Provider_NegativeMaxRetainedFiles_ThrowsBeforeTouchingTheDirectory()
+    {
+        var options = new BsftLoggingOptions { MaxRetainedFiles = -1 };
+
+        var act = () => new BsftFileLoggerProvider(options, TimeProvider.System);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*MaxRetainedFiles*");
     }
 
     [Fact]

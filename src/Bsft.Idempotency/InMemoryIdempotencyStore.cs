@@ -131,10 +131,10 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
         {
             if (!_records.TryGetValue(identity, out var existing))
             {
-                if (_records.TryAdd(identity, reservation))
-                    return new IdempotencyBeginResult(IdempotencyBeginOutcome.Started);
+                if (!_records.TryAdd(identity, reservation))
+                    continue;
 
-                continue;
+                return new IdempotencyBeginResult(IdempotencyBeginOutcome.Started);
             }
 
             if (!HasExpired(existing, now))

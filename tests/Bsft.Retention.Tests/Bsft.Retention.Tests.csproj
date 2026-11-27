@@ -1,7 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\PollIntervalCounts.cs" Link="Shared\PollIntervalCounts.cs" />
+    <Compile Include="..\Shared\SignallingScopeFactory.cs" Link="Shared\SignallingScopeFactory.cs" />
+    <Compile Include="..\Shared\PollIntervalProbe.cs" Link="Shared\PollIntervalProbe.cs" />
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
     <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
     <Compile Include="..\Shared\RecordingTimeProvider.cs" Link="Shared\RecordingTimeProvider.cs" />
+    <Compile Include="..\Shared\ControllableStartGate.cs" Link="Shared\ControllableStartGate.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -16,7 +21,9 @@
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Microsoft.Extensions.Configuration" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
 </Project>

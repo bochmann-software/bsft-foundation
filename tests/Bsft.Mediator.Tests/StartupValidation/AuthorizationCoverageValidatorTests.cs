@@ -3,6 +3,7 @@ using System.Reflection;
 using Bsft.Core;
 using Bsft.Mediator.DependencyInjection;
 using Bsft.Mediator.StartupValidation;
+using Bsft.Mediator.Tests.Support;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -365,6 +366,148 @@ public class AuthorizationCoverageValidatorTests
         registrations.IsRegistered(typeof(EnforcingProbeBehavior<,>)).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ValidateAsync_WithTheAuthorizationSlotReplacedAndTheReplacementRegistered_IsSilent()
+    {
+        // The host brings its own authorization: replacing the slot is what tells the check where to look.
+        var services = new ServiceCollection();
+        services.AddTransient(typeof(IPipelineBehavior<,>), typeof(EnforcingProbeBehavior<,>));
+        var config = new MediatorConfiguration()
+            .ReplaceDefaultBehavior(MediatorDefaults.Authorization, typeof(EnforcingProbeBehavior<,>));
+        var validator = Validator(services, config, typeof(PermissionDeclaringCommand));
+
+        var result = await validator.ValidateAsync();
+
+        result.IsValid.Should().BeTrue();
+        result.Warnings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WithTheAuthorizationSlotSuppressedAndTheBehaviorAdded_StillWarns()
+    {
+        // The counter-check: the same behavior registered beside a suppressed slot is invisible to the check.
+        var services = new ServiceCollection();
+        services.AddTransient(typeof(IPipelineBehavior<,>), typeof(EnforcingProbeBehavior<,>));
+        var config = new MediatorConfiguration()
+            .SuppressDefaultBehavior(MediatorDefaults.Authorization)
+            .AddBehavior(typeof(EnforcingProbeBehavior<,>));
+        var validator = Validator(services, config, typeof(PermissionDeclaringCommand));
+
+        var result = await validator.ValidateAsync();
+
+        result.Warnings.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WithTheAuthorizationSlotReplacedAfterTheDefaults_IsSilent()
+    {
+        // The placement moves the replacement behind the default chain; it still is the authorization slot.
+        // The registration comes from the configuration itself, as AddBsftMediator makes it.
+        var services = new ServiceCollection();
+        var config = new MediatorConfiguration()
+            .UseDefaults()
+            .ReplaceDefaultBehavior(
+                MediatorDefaults.Authorization,
+                typeof(EnforcingProbeBehavior<,>),
+                DefaultBehaviorPlacement.AfterDefaults);
+        config.RegisterBehaviors(services);
+        var validator = Validator(services, config, typeof(PermissionDeclaringCommand));
+
+        var result = await validator.ValidateAsync();
+
+        result.IsValid.Should().BeTrue();
+        result.Warnings.Should().BeEmpty();
+        services.Should().ContainSingle(descriptor => descriptor.ImplementationType == typeof(EnforcingProbeBehavior<,>));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WithTheAuthorizationSlotReplacedAfterTheDefaultsButNotRegistered_Warns()
+    {
+        // The counter-check: without UseDefaults() the replacement is never registered, and the check, which
+        // reads registrations, reports the gap rather than trusting the configuration call.
+        var services = new ServiceCollection();
+        var config = new MediatorConfiguration()
+            .ReplaceDefaultBehavior(
+                MediatorDefaults.Authorization,
+                typeof(EnforcingProbeBehavior<,>),
+                DefaultBehaviorPlacement.AfterDefaults);
+        config.RegisterBehaviors(services);
+        var validator = Validator(services, config, typeof(PermissionDeclaringCommand));
+
+        var result = await validator.ValidateAsync();
+
+        result.Warnings.Should().ContainSingle()
+            .Which.Should().Contain("DefaultBehaviorPlacement.AfterDefaults");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WithTheReplacementBetweenTwoAddedBehaviors_RunsAtItsCallAndIsSilent()
+    {
+        // AddBehavior(A), replacement R after the defaults, AddBehavior(B): the chain ends Transaction, A, R, B, and
+        // R still counts as the authorization slot.
+        var (chain, warnings) = await WireAsync(configuration => configuration
+            .AddBehavior(typeof(OuterAddedProbeBehavior<,>))
+            .ReplaceDefaultBehavior(MediatorDefaults.Authorization, typeof(EnforcingProbeBehavior<,>), DefaultBehaviorPlacement.AfterDefaults)
+            .AddBehavior(typeof(InnerAddedProbeBehavior<,>)));
+
+        chain.Should().EndWith(
+        [
+            typeof(Bsft.Mediator.Transactions.TransactionBehavior<,>),
+            typeof(OuterAddedProbeBehavior<,>),
+            typeof(EnforcingProbeBehavior<,>),
+            typeof(InnerAddedProbeBehavior<,>)
+        ]);
+        warnings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WithTheReplacementCalledAfterBothAddedBehaviors_RunsInnermostAndIsSilent()
+    {
+        // The counter-check: the same three calls in another order give another chain, still without a warning.
+        var (chain, warnings) = await WireAsync(configuration => configuration
+            .AddBehavior(typeof(OuterAddedProbeBehavior<,>))
+            .AddBehavior(typeof(InnerAddedProbeBehavior<,>))
+            .ReplaceDefaultBehavior(MediatorDefaults.Authorization, typeof(EnforcingProbeBehavior<,>), DefaultBehaviorPlacement.AfterDefaults));
+
+        chain.Should().EndWith(
+        [
+            typeof(Bsft.Mediator.Transactions.TransactionBehavior<,>),
+            typeof(OuterAddedProbeBehavior<,>),
+            typeof(InnerAddedProbeBehavior<,>),
+            typeof(EnforcingProbeBehavior<,>)
+        ]);
+        warnings.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Wires the mediator with the defaults, caching suppressed so that transaction is the innermost default, and
+    /// the given calls; returns the ordered chain for a command and the coverage warnings for a request declaring a
+    /// permission.
+    /// </summary>
+    private static async Task<(List<Type> Chain, IReadOnlyList<string> Warnings)> WireAsync(
+        Action<MediatorConfiguration> configure)
+    {
+        var services = new ServiceCollection().AddDefaultBehaviorDependencies();
+        MediatorConfiguration? config = null;
+        services.AddBsftMediator(mediator =>
+        {
+            config = mediator.UseDefaults().SuppressDefaultBehavior(MediatorDefaults.Caching);
+            configure(config);
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var orderer = provider.GetRequiredService<IPipelineBehaviorOrderer>();
+        var behaviors = provider.GetServices<IPipelineBehavior<ICommand<string>, string>>().ToList();
+        var chain = orderer.Order(behaviors)
+            .Select(behavior => behavior.GetType().GetGenericTypeDefinition())
+            .ToList();
+
+        var result = await Validator(services, config!, typeof(PermissionDeclaringCommand)).ValidateAsync();
+        result.IsValid.Should().BeTrue();
+
+        return (chain, result.Warnings);
+    }
+
     private static AuthorizationCoverageValidator Validator(IServiceCollection services, params Type[] types) =>
         Validator(services, new MediatorConfiguration(), types);
 
@@ -456,6 +599,30 @@ public class AuthorizationCoverageValidatorTests
     /// <typeparam name="TRequest">The request type.</typeparam>
     /// <typeparam name="TResponse">The response type.</typeparam>
     public sealed class NoOpBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    {
+        /// <inheritdoc />
+        public Task<TResponse> HandleAsync(
+            TRequest request,
+            Func<Task<TResponse>> next,
+            CancellationToken ct = default) => next();
+    }
+
+    /// <summary>A behavior the host adds ahead of the replacement.</summary>
+    /// <typeparam name="TRequest">The request type.</typeparam>
+    /// <typeparam name="TResponse">The response type.</typeparam>
+    public sealed class OuterAddedProbeBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    {
+        /// <inheritdoc />
+        public Task<TResponse> HandleAsync(
+            TRequest request,
+            Func<Task<TResponse>> next,
+            CancellationToken ct = default) => next();
+    }
+
+    /// <summary>A behavior the host adds behind the replacement.</summary>
+    /// <typeparam name="TRequest">The request type.</typeparam>
+    /// <typeparam name="TResponse">The response type.</typeparam>
+    public sealed class InnerAddedProbeBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     {
         /// <inheritdoc />
         public Task<TResponse> HandleAsync(

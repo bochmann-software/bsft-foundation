@@ -207,6 +207,26 @@ public class JobDispatcherTests
     }
 
     [Fact]
+    public async Task TheLoopWaitsItsPollIntervalOnTheInjectedClock()
+    {
+        var interval = TimeSpan.FromMinutes(5);
+        var clock = new ManualTimeProvider(_now);
+        var store = Substitute.For<IJobStore>();
+        store.ListClaimableAsync(Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Array.Empty<JobRun>());
+        _options.PollInterval = interval;
+        var dispatcher = new JobDispatcher(
+            store, _runner, clock, Options.Create(_options), _telemetry, NullLogger<JobDispatcher>.Instance);
+
+        var passes = await new PollIntervalProbe(clock, interval).MeasureAsync(
+            dispatcher.RunLoopAsync, () => store.ReceivedCalls().Count());
+
+        passes.First.Should().BePositive();
+        passes.BeforeInterval.Should().Be(passes.First, "the interval has not passed on the injected clock");
+        passes.AfterInterval.Should().BeGreaterThan(passes.First, "the interval passed on the injected clock");
+    }
+
+    [Fact]
     public async Task TheHostedServiceRunsTheLoopAndStopsCleanly()
     {
         // Exercises the BackgroundService entry point rather than the loop directly.
@@ -218,7 +238,7 @@ public class JobDispatcherTests
         // Since Microsoft.Extensions.Hosting 10, StartAsync runs the whole of ExecuteAsync on the
         // thread pool, so a stop right after the start can come before the first pass. The test waits
         // for the due run rather than relying on the synchronous start of earlier versions.
-        SpinWait.SpinUntil(() => _runner.Runs.Count == 1, TimeSpan.FromSeconds(10)).Should().BeTrue();
+        await _runner.FirstRun.WaitAsync(TimeSpan.FromSeconds(30));
         await dispatcher.StopAsync(CancellationToken.None);
 
         dispatcher.Dispose();
@@ -247,12 +267,16 @@ public class JobDispatcherTests
     private sealed class RecordingRunner : IJobRunner
     {
         private readonly List<JobRun> _runs = [];
+        private readonly TaskCompletionSource _firstRun = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _cancelAfter = int.MaxValue;
         private CancellationTokenSource? _cts;
         private TimeSpan _advanceBy = TimeSpan.Zero;
         private FixedTimeProvider? _time;
 
         public IReadOnlyList<JobRun> Runs => _runs;
+
+        /// <summary>Gets a task that completes when the first run has been handed over.</summary>
+        public Task FirstRun => _firstRun.Task;
 
         public void CancelAfter(int count, CancellationTokenSource cts)
         {
@@ -270,6 +294,7 @@ public class JobDispatcherTests
         public Task RunAsync(JobRun claimed, CancellationToken ct = default)
         {
             _runs.Add(claimed);
+            _firstRun.TrySetResult();
 
             if (_runs.Count >= _cancelAfter)
                 _cts?.Cancel();

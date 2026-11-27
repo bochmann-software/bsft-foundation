@@ -104,6 +104,46 @@ internal sealed class DefaultBehaviorCatalog
         Type.GetType(typeName, throwOnError: false);
 
     /// <summary>
+    /// A catalog in which one slot is filled by another behavior type, so that registration and the startup
+    /// checks see the replacement wherever they used to see the default, and ordering places it as asked.
+    /// </summary>
+    /// <param name="name">The slot to fill, which the caller has checked with <see cref="IsKnown"/>.</param>
+    /// <param name="behaviorType">The open generic behavior type definition filling it.</param>
+    /// <param name="placement">
+    /// Where the replacement runs. <see cref="DefaultBehaviorPlacement.AfterDefaults"/> gives it no rank in
+    /// <see cref="ResolveRanks"/> and leaves it out of <see cref="AvailableInSlot"/>, so the canonical orderer leaves it
+    /// where it is registered.
+    /// </param>
+    /// <returns>The new catalog; this one is left as it is.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    public DefaultBehaviorCatalog WithReplacement(
+        string name,
+        Type behaviorType,
+        DefaultBehaviorPlacement placement = DefaultBehaviorPlacement.InSlot)
+    {
+        if (name is null)
+            throw new ArgumentNullException(nameof(name));
+
+        if (behaviorType is null)
+            throw new ArgumentNullException(nameof(behaviorType));
+
+        var typeName = behaviorType.AssemblyQualifiedName
+            ?? throw new ArgumentException($"The behavior type '{behaviorType}' has no assembly-qualified name.", nameof(behaviorType));
+
+        return new DefaultBehaviorCatalog(
+            Descriptors
+                .Select(descriptor => IsSameName(descriptor.Name, name)
+                    ? descriptor with
+                    {
+                        TypeName = typeName,
+                        RegistrationCall = DescribeReplacementCall(descriptor.Name, behaviorType, placement),
+                        Placement = placement
+                    }
+                    : descriptor)
+                .ToArray());
+    }
+
+    /// <summary>
     /// The slot names, for the diagnostic of a suppression that matched nothing.
     /// </summary>
     /// <returns>The known names, comma separated, in canonical order.</returns>
@@ -139,14 +179,29 @@ internal sealed class DefaultBehaviorCatalog
     }
 
     /// <summary>
+    /// The available slots that run at their canonical position: <see cref="Available"/> without a
+    /// replacement placed after the default chain, which is registered and left unranked like a behavior
+    /// the host added itself.
+    /// </summary>
+    /// <param name="suppressedNames">The names the host suppressed.</param>
+    /// <returns>The slots taking part in the canonical order and their behavior types, outermost first.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="suppressedNames"/> is null.</exception>
+    public IReadOnlyList<KeyValuePair<DefaultBehaviorDescriptor, Type>> AvailableInSlot(
+        IReadOnlyCollection<string> suppressedNames) =>
+        Available(suppressedNames)
+            .Where(slot => slot.Key.Placement == DefaultBehaviorPlacement.InSlot)
+            .ToArray();
+
+    /// <summary>
     /// The rank of every available default behavior type, keyed by its open-generic type definition
     /// and counted from the outermost slot. Suppression is irrelevant here: a behavior the host
-    /// registers itself still belongs in its canonical position.
+    /// registers itself still belongs in its canonical position. A replacement placed after the default
+    /// chain has no rank, so the orderer leaves it where it is registered.
     /// </summary>
     /// <returns>The rank per behavior type definition.</returns>
     public IReadOnlyDictionary<Type, int> ResolveRanks()
     {
-        var available = Available([]);
+        var available = AvailableInSlot([]);
         var ranks = new Dictionary<Type, int>();
 
         for (var rank = 0; rank < available.Count; rank++)
@@ -163,6 +218,19 @@ internal sealed class DefaultBehaviorCatalog
     /// </summary>
     private static Type? ResolveType(DefaultBehaviorDescriptor descriptor) =>
         Type.GetType(descriptor.TypeName, throwOnError: false);
+
+    /// <summary>
+    /// The configuration call that fills a replaced slot, for the diagnostics that name how a slot is
+    /// registered.
+    /// </summary>
+    private static string DescribeReplacementCall(string slotName, Type behaviorType, DefaultBehaviorPlacement placement)
+    {
+        var typeExpression = $"typeof({behaviorType.Name.Split('`')[0]}<,>)";
+
+        return placement == DefaultBehaviorPlacement.InSlot
+            ? $"ReplaceDefaultBehavior(MediatorDefaults.{slotName}, {typeExpression})"
+            : $"ReplaceDefaultBehavior(MediatorDefaults.{slotName}, {typeExpression}, DefaultBehaviorPlacement.{placement})";
+    }
 
     private static bool IsSameName(string descriptorName, string candidate) =>
         string.Equals(descriptorName, candidate, StringComparison.OrdinalIgnoreCase);

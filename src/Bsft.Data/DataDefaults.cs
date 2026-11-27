@@ -16,4 +16,9 @@ public static class DataDefaults
     /// canonical tenant claim the authentication stack maps onto, so changing it changes both ends.
     /// </summary>
     public const string TenantClaimType = "tenant_id";
+
+    /// <summary>
+    /// The largest keyset page when a host states none, the same as the offset query surface's maximum.
+    /// </summary>
+    public const int KeysetMaxPageSize = 100;
 }

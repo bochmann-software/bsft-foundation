@@ -1,4 +1,5 @@
 using System.Globalization;
+using Bsft.Core;
 using Bsft.Data.MultiTenancy;
 using Bsft.Http;
 using Microsoft.AspNetCore.Http;
@@ -24,15 +25,9 @@ namespace Bsft.Localization;
 /// </remarks>
 public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleReader
 {
-    // A resolved translation is cached for this long. Long enough to keep the lookup off the
-    // database, short enough that a change published without an invalidation event still lands.
-    private static readonly TimeSpan CacheLifetime = TimeSpan.FromMinutes(30);
-
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IHttpContextAccessor _requests;
+    private readonly ITranslationChain _chain;
     private readonly TranslationSeed _seed;
     private readonly IMemoryCache _cache;
-    private readonly BsftLocalizationOptions _localeOptions;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BsftStringLocalizer"/> class.
@@ -49,12 +44,29 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
         TranslationSeed seed,
         IMemoryCache cache,
         BsftLocalizationOptions localeOptions)
+        // The one place a chain is built outside DI: a caller of this constructor has no registered chain
+        // to share, so the localizer gets a private one over the arguments it was given.
+        : this(new TranslationChain(scopeFactory, requests, seed, cache, localeOptions), seed, cache)
     {
-        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _requests = requests ?? throw new ArgumentNullException(nameof(requests));
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BsftStringLocalizer"/> class over the resolution
+    /// chain the registered services share.
+    /// </summary>
+    /// <param name="chain">The chain to resolve through.</param>
+    /// <param name="seed">The seed translations, for listing the available locales and resolving bundles.</param>
+    /// <param name="cache">The memory cache holding resolved bundles.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    /// <remarks>
+    /// Takes only what the localizer needs beyond the chain, and both come from the same singletons the
+    /// chain was built over, so nothing here can disagree with it.
+    /// </remarks>
+    internal BsftStringLocalizer(ITranslationChain chain, TranslationSeed seed, IMemoryCache cache)
+    {
         _seed = seed ?? throw new ArgumentNullException(nameof(seed));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
-        _localeOptions = localeOptions ?? throw new ArgumentNullException(nameof(localeOptions));
+        _chain = chain ?? throw new ArgumentNullException(nameof(chain));
     }
 
     /// <inheritdoc />
@@ -102,10 +114,10 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
     {
         var locale = CultureInfo.CurrentUICulture.Name;
 
-        return Read(services =>
+        return _chain.Read(services =>
         {
             var reader = services.GetRequiredService<ITranslationReader>();
-            var tenantId = ResolveTenantId(services);
+            var tenantId = _chain.ResolveTenantId(services);
 
             return reader.ListForLocale(locale, tenantId)
                 .Select(translation => new LocalizedString(translation.Key, translation.Value, false))
@@ -121,30 +133,15 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
     /// <returns>The resolved value, or <c>null</c> if no translation was found at any level.</returns>
     internal string? Resolve(string key, string locale)
     {
-        if (string.IsNullOrEmpty(locale))
-            locale = _localeOptions.DefaultLocale;
+        locale = _chain.LocaleOrDefault(locale);
 
-        return Read(services =>
+        return _chain.Read(services =>
         {
-            var tenantId = ResolveTenantId(services);
-            var cacheKey = new TranslationCacheKey(tenantId, locale, key);
+            var tenantId = _chain.ResolveTenantId(services);
 
-            if (_cache.TryGetValue(cacheKey, out string? cached))
-                return cached;
-
-            // Load just the candidate rows for this key once, then resolve through the same in-memory
-            // chain used by ResolveAll (avoids two separate store reads per fallback level).
-            var rows = services.GetRequiredService<ITranslationReader>()
-                .ListForKey(key, locale, _localeOptions.FallbackLocale, tenantId);
-
-            var value = ResolveFromLoaded(rows, key, locale, tenantId);
-
-            // Only cache positive results. Caching a miss would otherwise hide a key that is added later
-            // (e.g. via seeding) for up to the cache lifetime, since seeding does not invalidate the cache.
-            if (value is not null)
-                _cache.Set(cacheKey, value, CacheLifetime);
-
-            return value;
+            return _chain.TryGetCached(tenantId, locale, key, out var cached)
+                ? cached
+                : _chain.Load(services, tenantId, locale, key);
         });
     }
 
@@ -155,7 +152,7 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
     /// </remarks>
     internal IReadOnlyList<string> ListAvailableLocales()
     {
-        var storedLocales = Read(services => services.GetRequiredService<ITranslationReader>().ListLocales());
+        var storedLocales = _chain.Read(services => services.GetRequiredService<ITranslationReader>().ListLocales());
 
         var seedLocales = _seed.GetEntries().Keys;
 
@@ -178,14 +175,14 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
     /// </para>
     /// <para>
     /// Hashing at materialisation time rather than per request is what makes a revalidation cheap:
-    /// a conditional request that hits the cache costs a dictionary lookup and a string comparison,
-    /// not a re-hash of every translation in the locale.
+    /// a conditional request that hits the cache costs one cache lookup (which boxes the key) and a
+    /// string comparison, not a re-hash of every translation in the locale.
     /// </para>
     /// </remarks>
     internal TranslationBundle ResolveBundle(string locale) =>
-        Read(services =>
+        _chain.Read(services =>
         {
-            var tenantId = ResolveTenantId(services);
+            var tenantId = _chain.ResolveTenantId(services);
             var cacheKey = new BundleCacheKey(tenantId, locale);
 
             if (_cache.TryGetValue(cacheKey, out TranslationBundle? cached) && cached is not null)
@@ -194,7 +191,7 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
             var translations = ResolveAllForTenant(services, locale, tenantId);
             var bundle = new TranslationBundle(translations, ComputeVersion(locale, tenantId, translations));
 
-            _cache.Set(cacheKey, bundle, CacheLifetime);
+            _cache.Set(cacheKey, bundle, _chain.CacheLifetime);
 
             return bundle;
         });
@@ -204,42 +201,6 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
 
     /// <inheritdoc />
     TranslationBundle ITranslationBundleReader.ResolveBundle(string locale) => ResolveBundle(locale);
-
-    /// <summary>
-    /// Runs a read against the services of the request being served, or of a scope opened for it.
-    /// </summary>
-    /// <typeparam name="TResult">What the read returns.</typeparam>
-    /// <param name="read">The read, given the services to resolve the scoped store and tenant from.</param>
-    /// <returns>What the read returned.</returns>
-    /// <remarks>
-    /// The result is materialised inside the call rather than streamed out of it, because the scope
-    /// this may have opened is gone by the time the caller looks at what it got.
-    /// </remarks>
-    private TResult Read<TResult>(Func<IServiceProvider, TResult> read)
-    {
-        var ambient = _requests.HttpContext?.RequestServices;
-
-        if (ambient is not null)
-            return read(ambient);
-
-        using var scope = _scopeFactory.CreateScope();
-
-        return read(scope.ServiceProvider);
-    }
-
-    /// <summary>
-    /// Reads the tenant of the current request, if there is one.
-    /// </summary>
-    /// <param name="services">The scoped provider to read the tenant context from.</param>
-    /// <returns>The tenant id, or <see langword="null"/> when the request runs in no tenant.</returns>
-    private static string? ResolveTenantId(IServiceProvider services)
-    {
-        var tenantContext = services.GetService<ITenantContext>();
-
-        return tenantContext is not null && tenantContext.IsResolved
-            ? tenantContext.TenantId
-            : null;
-    }
 
     /// <summary>
     /// Reduces a bundle to the version that identifies it.
@@ -316,15 +277,15 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
                 allKeys.Add(key);
         }
 
-        if (!string.Equals(locale, _localeOptions.FallbackLocale, StringComparison.OrdinalIgnoreCase)
-            && seedEntries.TryGetValue(_localeOptions.FallbackLocale, out var fallbackSeedEntries))
+        if (!string.Equals(locale, _chain.FallbackLocale, StringComparison.OrdinalIgnoreCase)
+            && seedEntries.TryGetValue(_chain.FallbackLocale, out var fallbackSeedEntries))
         {
             foreach (var key in fallbackSeedEntries.Keys)
                 allKeys.Add(key);
         }
 
         // Collect all keys from the store
-        var storedEntries = reader.ListForLocaleOrFallback(locale, _localeOptions.FallbackLocale, tenantId);
+        var storedEntries = reader.ListForLocaleOrFallback(locale, _chain.FallbackLocale, tenantId);
 
         foreach (var entry in storedEntries)
             allKeys.Add(entry.Key);
@@ -332,84 +293,13 @@ public sealed class BsftStringLocalizer : IStringLocalizer, ITranslationBundleRe
         // Resolve each key against the already-loaded rows instead of issuing a read per key (N+1).
         foreach (var key in allKeys)
         {
-            var value = ResolveFromLoaded(storedEntries, key, locale, tenantId);
+            var value = _chain.ResolveFromLoaded(storedEntries, key, locale, tenantId);
             if (value is not null)
                 result[key] = value;
         }
 
         return result;
     }
-
-    private string? ResolveFromLoaded(IReadOnlyList<Translation> loaded, string key, string locale, string? tenantId)
-    {
-        var value = ResolveForLocaleFromLoaded(loaded, key, locale, tenantId);
-        if (value is not null)
-            return value;
-
-        // Fall back to the fallback locale. When locale already is the fallback locale this simply
-        // repeats the (failed) lookup and returns null, which keeps the control flow branch-free.
-        return ResolveForLocaleFromLoaded(loaded, key, _localeOptions.FallbackLocale, tenantId);
-    }
-
-    private string? ResolveForLocaleFromLoaded(IReadOnlyList<Translation> loaded, string key, string locale, string? tenantId)
-    {
-        if (tenantId is not null)
-        {
-            var tenantValue = Match(loaded, key, locale, tenantId);
-            if (tenantValue is not null)
-                return tenantValue;
-        }
-
-        var globalValue = Match(loaded, key, locale, tenantId: null);
-        if (globalValue is not null)
-            return globalValue;
-
-        return _seed.TryGetValue(locale, key, out var seedValue) ? seedValue : null;
-    }
-
-    /// <summary>
-    /// Finds the row of one tenant, or of none, among the rows that were loaded for a key.
-    /// </summary>
-    /// <param name="loaded">The rows the store returned.</param>
-    /// <param name="key">The translation key to match.</param>
-    /// <param name="locale">The locale to match.</param>
-    /// <param name="tenantId">The tenant to match, or <see langword="null"/> for a global row.</param>
-    /// <returns>The matching value, or <see langword="null"/> when no row matches.</returns>
-    /// <remarks>
-    /// Keys and locale codes are matched case insensitively, the way the rest of this package treats
-    /// them: a row stored as <c>EN</c> is the locale a caller asks for as <c>en</c>, and a bundle
-    /// that deduplicates the two spellings into one locale has to resolve both to the same rows. The
-    /// tenant is matched exactly, because it is an identity rather than a name whose spelling the
-    /// caller chose.
-    /// </remarks>
-    private static string? Match(IReadOnlyList<Translation> loaded, string key, string locale, string? tenantId)
-    {
-        // A loop rather than FirstOrDefault: this runs once per key of a bundle, and the predicate
-        // would close over the three values and allocate for each of them.
-        for (var index = 0; index < loaded.Count; index++)
-        {
-            var candidate = loaded[index];
-
-            if (string.Equals(candidate.Key, key, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(candidate.Locale, locale, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(candidate.TenantId, tenantId, StringComparison.Ordinal))
-                return candidate.Value;
-        }
-
-        return null;
-    }
-
-    /// <summary>What one resolved translation is cached under.</summary>
-    /// <param name="TenantId">The tenant it was resolved for, or <see langword="null"/> for none.</param>
-    /// <param name="Locale">The locale it was resolved for.</param>
-    /// <param name="Key">The translation key.</param>
-    /// <remarks>
-    /// A key of its own rather than the three parts joined into a string. A joined key needs a stand-in
-    /// for the absent tenant and a separator that none of the parts may contain, and neither holds:
-    /// a tenant whose id is literally the stand-in, or a key containing the separator, would read
-    /// another scope's entry. The parts are compared as parts here, so no spelling can collide.
-    /// </remarks>
-    private readonly record struct TranslationCacheKey(string? TenantId, string Locale, string Key);
 
     /// <summary>What one resolved bundle is cached under.</summary>
     /// <param name="TenantId">The tenant it was resolved for, or <see langword="null"/> for none.</param>

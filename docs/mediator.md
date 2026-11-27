@@ -77,7 +77,7 @@ services.AddBsftMediator(mediator => mediator
 throws. It registers `IMediator` as scoped, the configuration as a singleton,
 the telemetry emitter, and `MediatorStartupValidator` as an `IStartupValidator`.
 
-`MediatorConfiguration` has exactly six methods:
+`MediatorConfiguration` has these methods:
 
 | Method | Effect |
 | --- | --- |
@@ -87,6 +87,45 @@ the telemetry emitter, and `MediatorStartupValidator` as an `IStartupValidator`.
 | `EnableTracing()` | Registers `TracingBehavior<,>` as the outermost behavior and emits spans and metrics. |
 | `UseDefaults()` | Registers the canonical cross-cutting chain from whichever behavior packages the application references, in the order below. Implies `EnableTracing()`. |
 | `SuppressDefaultBehavior(string)` | Drops one behavior from that chain. A name matching none throws. |
+| `ReplaceDefaultBehavior(string, Type)` | Puts an open-generic behavior of the host's own into one slot of that chain, at the slot's position. A name matching none throws `ArgumentException`, a slot that is already replaced or suppressed throws `InvalidOperationException`. |
+| `ReplaceDefaultBehavior(string, Type, DefaultBehaviorPlacement)` | The same, with the position chosen: `InSlot` (what the two-argument call does) or `AfterDefaults`, which registers the replacement where `AddBehavior` would. An undefined placement throws `ArgumentOutOfRangeException`. |
+
+`ReplaceDefaultBehavior(MediatorDefaults.Authorization, typeof(MyAccessBehavior<,>))` is the way to bring an
+authorization of one's own: the replacement runs where `AuthorizationBehavior` would, the canonical orderer
+places it there, and `AuthorizationCoverageValidator` counts it as the authorization slot, so the host starts
+without the warning that suppressing the slot and adding a behavior with `AddBehavior` produces. The validator
+cannot tell what the replacement checks; that it checks something is the host's promise.
+
+### Placing a replacement after the defaults
+
+By default the replacement runs where `AuthorizationBehavior` would: after tracing and ahead of validation,
+audit, retry and transaction. A behavior that must run once per retry attempt and inside the transaction, such as
+an authorization that reads state the transaction protects, asks for the other placement:
+
+```csharp
+services.AddBsftMediator(mediator => mediator
+    .UseDefaults()
+    .AddBehavior(typeof(MyGateBehavior<,>))
+    .ReplaceDefaultBehavior(
+        MediatorDefaults.Authorization,
+        typeof(MyAccessBehavior<,>),
+        DefaultBehaviorPlacement.AfterDefaults)
+    .AddBehavior(typeof(MyValidationBehavior<,>)));
+// Tracing → Validation → Audit → Retry → Transaction → Caching → MyGate → MyAccess → MyValidation → handler
+```
+
+With `DefaultBehaviorPlacement.AfterDefaults` the replacement has no canonical rank and is registered among the
+`AddBehavior` behaviors in the order of the configuration calls, so it sits inside every default behavior and
+between the added behaviors exactly where its call stands. Everything else stays as with `InSlot`:
+
+- `AuthorizationCoverageValidator` counts it as the authorization slot, so there is no warning.
+- The startup validator checks that it can be activated, as it does for every default behavior.
+- The slot cannot also be suppressed or replaced a second time, and the replacement takes effect only with
+  `UseDefaults()`.
+- A registration of the same type made earlier directly against `IPipelineBehavior<,>` is kept, not duplicated,
+  and its position is the one that counts.
+
+The placement is not tied to authorization: any slot can be replaced either way.
 
 ## Pipeline behaviors
 
@@ -148,7 +187,7 @@ The module ships four:
 | `LoggingBehavior<,>` | Logs start, duration and outcome. |
 | `TracingBehavior<,>` | Span plus metrics; outermost when tracing is enabled. |
 | `ValidationBehavior<,>` | Runs the registered `IValidator<TRequest>` and throws `ValidationException`. |
-| `TransactionBehavior<,>` | Wraps handlers marked `[Transactional]` in a database transaction. |
+| `TransactionBehavior<,>` | Wraps handlers marked `[Transactional]`, or every command under `ApplyTransactionToAllCommands()`, in a database transaction; with an `IAmbientTransaction` registered it runs the request as a unit of it, and a nested request joins the open one. |
 
 ### Attribute-driven behaviors: the request metadata seam
 
@@ -177,8 +216,13 @@ public interface IRequestMetadata
     TAttribute? FindAttribute<TAttribute>()          where TAttribute : Attribute;
     IReadOnlyList<TAttribute> ListAttributes<TAttribute>() where TAttribute : Attribute;
     bool HasAttribute<TAttribute>()                 where TAttribute : Attribute;
+    bool IsCommand { get; }                         // implements ICommand<T> (from 2.2.1-preview.1)
 }
 ```
+
+`IsCommand` is what `ApplyTransactionToAllCommands()` and `ShouldRetryAllCommands`
+read. It is a new member of a public interface, so a host that implements
+`IRequestMetadata` itself adds it; one that wraps the shipped provider gets it.
 
 Both live in `Bsft.Mediator.Abstractions`, so a behavior satellite takes the seam
 without taking the dispatcher into its closure. The descriptor is built once per
@@ -258,6 +302,53 @@ not satisfy the constraint, so it is registered and never invoked. That is a
 property of the resolution, not something the metadata provider changes: express
 the opt-in as an attribute or a marker interface read *inside* `HandleAsync`, the
 way the shipped behaviors do.
+
+### Rescoping behaviors
+
+A behavior that retries the rest of the pipeline normally reruns `next()` in the
+request's scope, against the same scoped services. That is wrong when a failed
+attempt leaves those services unusable, which is what an aborted shared
+transaction does to its connection and contexts. From 2.2.1-preview.1 a behavior
+can implement `IRescopingPipelineBehavior<TRequest, TResponse>` (an
+`IPipelineBehavior<,>` with a second `HandleAsync` overload), and the mediator
+then hands it the rest of the pipeline as an `IPipelineContinuation<TResponse>`
+instead of a delegate:
+
+```csharp
+public delegate Task<TResponse> PipelineAttempt<TResponse>(IServiceProvider scope, Func<Task<TResponse>> rest);
+
+public interface IPipelineContinuation<TResponse>
+{
+    Task<TResponse> RunAsync(PipelineAttempt<TResponse> attempt, CancellationToken cancellationToken = default);
+    Task<TResponse> RunInNewScopeAsync(PipelineAttempt<TResponse> attempt, CancellationToken cancellationToken = default);
+}
+```
+
+`RunAsync` runs the rest in the request's scope. `RunInNewScopeAsync` creates a
+fresh scope, lets every registered `IRequestScopeSeed` copy the request scope's
+state into it (the tenant, the current user, a correlation id), resolves the later
+behaviors and the handler from it and disposes it once the attempt completed.
+Both hand the attempt the provider of the scope the rest runs in, so the behavior
+reads that scope's services while it is alive. The shipped `RetryBehavior` is the
+one rescoping behavior; a host registers a seed for the state its scoped services
+carry:
+
+```csharp
+// CurrentTenant: the host's own scoped holder, set by its middleware per request.
+public sealed class TenantSeed(CurrentTenant requestTenant) : IRequestScopeSeed
+{
+    public void Seed(IServiceProvider serviceProvider) =>
+        serviceProvider.GetRequiredService<CurrentTenant>().TenantId = requestTenant.TenantId;
+}
+
+services.AddScoped<IRequestScopeSeed, TenantSeed>();
+```
+
+A seed is resolved from the request's scope and runs before anything is resolved
+from the fresh one. `IRequestNesting`, registered scoped by `AddBsftMediator`,
+records whether an outer request of the scope is being retried or holds a
+transaction open; the retry and transaction behaviors read it to act on the
+outermost request only.
 
 ## The default chain
 
@@ -527,6 +618,76 @@ both names the context the transaction wraps and clears the startup failure.
 With `UseDefaults()` the transaction is opened inside the retry behavior, so a
 `[Transactional]` handler on a `[Retryable]` request gets one transaction per
 attempt, not one shared across every attempt. See "The default chain" above.
+
+### One transaction across several contexts
+
+A modular host whose modules each own a context over one database registers the
+shared transaction of `Bsft.Data` instead
+([data.md](data.md#a-transaction-across-several-contexts)):
+
+```csharp
+services.AddBsftDataPostgresTransaction(connectionString);   // or AddBsftDataSharedTransaction(factory)
+services.AddDbContext<CatalogDbContext>((sp, o) => o.UseBsftSharedNpgsql(sp));
+services.AddDbContext<InventoryDbContext>((sp, o) => o.UseBsftSharedNpgsql(sp));
+```
+
+That registers `IAmbientTransaction` (`Bsft.Core.Persistence`), and with it
+registered the behavior resolves no `DbContext` at all. A `[Transactional]`
+request runs as a unit of the ambient transaction: the outermost request opens it
+and commits it once after its handler returned, and a `[Transactional]` request
+dispatched from inside that handler, to whichever module, **joins** it rather
+than opening a second transaction. Any exception rolls back the writes of every
+context. A request without `[Transactional]` dispatched inside a transactional one
+still writes into the open transaction, because the contexts are enlisted, not
+the requests. The scope runs one unit at a time: a second request started on the
+same scope from a parallel flow while the first holds the transaction open throws
+`InvalidOperationException`; give parallel work scopes of its own.
+
+The multi-context startup check above stays exactly as it is for a host that does
+not opt in. With an `IAmbientTransaction` registered it passes without a base
+`DbContext` registration, because there is no context to choose between; the
+`services.AddScoped<DbContext>(...)` workaround is not needed.
+
+The retry behavior honours the same boundary: a `[Retryable]` request that is
+dispatched while the ambient transaction is already open passes through, so the
+failure reaches the outermost attempt, which is rolled back whole and retried in a
+fresh transaction in a fresh scope (see "Rescoping behaviors" above). A failure
+the provider classifies as a transaction conflict (PostgreSQL `40001`, `40P01`) is
+retried even when the host's `ShouldRetry` predicate would not. See
+[resilience.md](resilience.md#retrying-a-shared-transaction).
+
+### Every command without the attribute
+
+A host in which every write belongs in a transaction can say so once instead of
+marking each handler:
+
+```csharp
+services.AddBsftMediator(m => m
+    .RegisterServicesFromAssembly(assembly)
+    .UseDefaults()
+    .ApplyTransactionToAllCommands());
+services.AddBsftResilienceMediator(o => o.ShouldRetryAllCommands = true); // retry every command as well
+```
+
+`ApplyTransactionToAllCommands()` makes every `ICommand<T>` and `ICommand`
+transactional as if its handler carried `[Transactional]`; queries stay
+transactional only where their handler is marked. With the shared transaction the
+outermost command opens it and every nested command joins it. Without it, a
+command dispatched while the behavior holds a transaction open runs inside that
+transaction instead of beginning a second one on the same context. The behaviors
+keep their slots in the default chain: authorization and validation run outside
+retry and transaction, once per request.
+
+The policy is readable as `IMediatorTransactionPolicy`
+(`ShouldApplyTransactionToAllCommands`), which `AddBsftMediator` registers, and two
+startup validators **fail** the host rather than warn when it cannot hold:
+`TransactionPolicyStartupValidator` when `ApplyTransactionToAllCommands()` is on
+but `TransactionBehavior<,>` is not in the chain, and the one of
+`Bsft.Resilience.Mediator` when `ShouldRetryAllCommands` is on without
+`ApplyTransactionToAllCommands()`, because retrying every command without one
+transaction around it reruns the handlers that already committed, or without a
+registered `IAmbientTransaction`, because a retry in the request's scope saves
+again what the failed attempt's contexts still track.
 
 ## Telemetry
 

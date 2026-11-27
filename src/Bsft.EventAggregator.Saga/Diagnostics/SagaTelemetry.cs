@@ -26,6 +26,7 @@ internal sealed class SagaTelemetry : ISagaTelemetry
     private const string TimeoutDispatchActivity = "saga.timeout";
 
     private readonly IInstrumentationSource _source;
+    private readonly TimeProvider _timeProvider;
     private readonly Counter<long> _started;
     private readonly Counter<long> _completed;
     private readonly Histogram<double> _stepDuration;
@@ -39,10 +40,13 @@ internal sealed class SagaTelemetry : ISagaTelemetry
     /// Initializes a new instance of the <see cref="SagaTelemetry"/> class.
     /// </summary>
     /// <param name="sources">The instrumentation source provider.</param>
-    public SagaTelemetry(IInstrumentationSourceProvider sources)
+    /// <param name="timeProvider">The clock a step's duration is measured on.</param>
+    public SagaTelemetry(IInstrumentationSourceProvider sources, TimeProvider timeProvider)
     {
         if (sources is null)
             throw new ArgumentNullException(nameof(sources));
+
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
 
         _source = sources.Get(SourceName);
         _started = _source.GetOrCreateCounter(StartedMetric);
@@ -105,7 +109,7 @@ internal sealed class SagaTelemetry : ISagaTelemetry
             activity.SetTag("saga.step_index", stepIndex);
         }
 
-        return new SagaStepTelemetryScope(this, activity, sagaType);
+        return new SagaStepTelemetryScope(this, _timeProvider, activity, sagaType);
     }
 
     /// <summary>Records the duration of a completed step with its outcome.</summary>

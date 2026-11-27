@@ -30,13 +30,16 @@ public sealed class EFCoreSagaStore : IEFCoreSagaStore
     /// The accessor for an open persistence window, or <c>null</c> when the store always commits on
     /// its own — which is the case for the state-only provider, whose timeouts are not persisted.
     /// </param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="scopeFactory"/> or <paramref name="timeProvider"/> is null.
+    /// </exception>
     public EFCoreSagaStore(
         IServiceScopeFactory scopeFactory,
-        TimeProvider? timeProvider = null,
+        TimeProvider timeProvider,
         ISagaDbContextAccessor? window = null)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _window = window;
     }
 

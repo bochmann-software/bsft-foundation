@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace Bsft.Data.MultiTenancy;
 
@@ -8,6 +9,14 @@ namespace Bsft.Data.MultiTenancy;
 /// </summary>
 public static class BsftDbContextOptionsExtensions
 {
+#if NET10_0_OR_GREATER
+    /// <summary>
+    /// The name <see cref="UseNamedTenantFilter{TContext}(ModelBuilder, TContext, string)"/> and
+    /// <see cref="UseNamedStaticTenantFilter"/> give the tenant filter unless told otherwise.
+    /// </summary>
+    public const string TenantFilterName = "bsft.tenant";
+#endif
+
     /// <summary>
     /// Applies global query filters on all entity types implementing <see cref="ITenantEntity"/>,
     /// scoping queries to the tenant the executing context instance is scoped to.
@@ -35,14 +44,7 @@ public static class BsftDbContextOptionsExtensions
         if (context is null)
             throw new ArgumentNullException(nameof(context));
 
-        // Typing the constant as the interface rather than as the concrete context type is what makes
-        // EF Core replace it with the context executing the query: its rewriter matches any subtree
-        // whose static type the context type is assignable to.
-        var currentTenantId = Expression.Property(
-            Expression.Constant(context, typeof(ITenantScopedDbContext)),
-            nameof(ITenantScopedDbContext.CurrentTenantId));
-
-        return ApplyTenantFilters(modelBuilder, currentTenantId);
+        return ApplyTenantFilters(modelBuilder, CurrentTenantId(context), AnonymousFilter);
     }
 
     /// <summary>
@@ -76,14 +78,78 @@ public static class BsftDbContextOptionsExtensions
         if (tenantContext is null)
             throw new ArgumentNullException(nameof(tenantContext));
 
-        var currentTenantId = Expression.Property(
-            Expression.Constant(tenantContext),
-            nameof(ITenantContext.TenantId));
-
-        return ApplyTenantFilters(modelBuilder, currentTenantId);
+        return ApplyTenantFilters(modelBuilder, StaticTenantId(tenantContext), AnonymousFilter);
     }
 
-    private static ModelBuilder ApplyTenantFilters(ModelBuilder modelBuilder, Expression currentTenantId)
+#if NET10_0_OR_GREATER
+    /// <summary>
+    /// Applies the tenant filter of <see cref="UseTenantFilter{TContext}(ModelBuilder, TContext)"/> as a
+    /// <em>named</em> query filter, so the model can carry further named filters next to it.
+    /// </summary>
+    /// <typeparam name="TContext">The context type; see <see cref="UseTenantFilter{TContext}(ModelBuilder, TContext)"/>.</typeparam>
+    /// <param name="modelBuilder">The model builder.</param>
+    /// <param name="context">The context being built. Pass <c>this</c> from <c>OnModelCreating</c>.</param>
+    /// <param name="filterName">The filter's name; defaults to <see cref="TenantFilterName"/>.</param>
+    /// <returns>The model builder for chaining.</returns>
+    /// <remarks>
+    /// EF Core 10 refuses to combine an anonymous filter with named ones on one entity type
+    /// (<c>AnonymousAndNamedFiltersCombined</c>), so a model that adds a soft-delete or any other filter
+    /// by name applies the tenant filter through this method. A single query can then step around one
+    /// filter alone, <c>IgnoreQueryFilters([TenantFilterName])</c>, and keep the others.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="modelBuilder"/> or <paramref name="context"/> is null.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="filterName"/> is null or blank.</exception>
+    public static ModelBuilder UseNamedTenantFilter<TContext>(
+        this ModelBuilder modelBuilder, TContext context, string filterName = TenantFilterName)
+        where TContext : DbContext, ITenantScopedDbContext
+    {
+        ArgumentNullException.ThrowIfNull(modelBuilder);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(filterName);
+
+        return ApplyTenantFilters(modelBuilder, CurrentTenantId(context), (entity, filter) => entity.HasQueryFilter(filterName, filter));
+    }
+
+    /// <summary>
+    /// Applies the tenant filter of <see cref="UseStaticTenantFilter"/> as a <em>named</em> query filter,
+    /// so the model can carry further named filters next to it.
+    /// </summary>
+    /// <param name="modelBuilder">The model builder.</param>
+    /// <param name="tenantContext">The tenant context providing the current tenant identifier.</param>
+    /// <param name="filterName">The filter's name; defaults to <see cref="TenantFilterName"/>.</param>
+    /// <returns>The model builder for chaining.</returns>
+    /// <remarks>
+    /// The caveat of <see cref="UseStaticTenantFilter"/> applies unchanged: only for a process whose
+    /// tenant never varies.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="modelBuilder"/> or <paramref name="tenantContext"/> is null.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="filterName"/> is null or blank.</exception>
+    public static ModelBuilder UseNamedStaticTenantFilter(
+        this ModelBuilder modelBuilder, ITenantContext tenantContext, string filterName = TenantFilterName)
+    {
+        ArgumentNullException.ThrowIfNull(modelBuilder);
+        ArgumentNullException.ThrowIfNull(tenantContext);
+        ArgumentException.ThrowIfNullOrWhiteSpace(filterName);
+
+        return ApplyTenantFilters(modelBuilder, StaticTenantId(tenantContext), (entity, filter) => entity.HasQueryFilter(filterName, filter));
+    }
+#endif
+
+    // Typing the constant as the interface rather than as the concrete context type is what makes
+    // EF Core replace it with the context executing the query: its rewriter matches any subtree
+    // whose static type the context type is assignable to.
+    private static MemberExpression CurrentTenantId(ITenantScopedDbContext context) =>
+        Expression.Property(
+            Expression.Constant(context, typeof(ITenantScopedDbContext)),
+            nameof(ITenantScopedDbContext.CurrentTenantId));
+
+    private static MemberExpression StaticTenantId(ITenantContext tenantContext) =>
+        Expression.Property(Expression.Constant(tenantContext), nameof(ITenantContext.TenantId));
+
+    private static void AnonymousFilter(EntityTypeBuilder entity, LambdaExpression filter) => entity.HasQueryFilter(filter);
+
+    private static ModelBuilder ApplyTenantFilters(
+        ModelBuilder modelBuilder, Expression currentTenantId, Action<EntityTypeBuilder, LambdaExpression> applyFilter)
     {
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
         {
@@ -97,7 +163,7 @@ public static class BsftDbContextOptionsExtensions
                 Expression.Equal(tenantIdProperty, currentTenantId),
                 parameter);
 
-            modelBuilder.Entity(entityType.ClrType).HasQueryFilter(filter);
+            applyFilter(modelBuilder.Entity(entityType.ClrType), filter);
         }
 
         return modelBuilder;

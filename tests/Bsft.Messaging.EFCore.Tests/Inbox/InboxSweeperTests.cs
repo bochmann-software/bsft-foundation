@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using Bsft.Tests.Shared;
 
 namespace Bsft.Messaging.EFCore.Tests.Inbox;
 
@@ -118,6 +119,25 @@ public sealed class InboxSweeperTests : IDisposable
 
         pruned.Should().Be(1);
         (await ReadInboxAsync()).Should().ContainSingle().Which.Consumer.Should().Be("billing");
+    }
+
+    [Fact]
+    public async Task The_wait_between_sweeps_runs_on_the_injected_clock()
+    {
+        var interval = TimeSpan.FromMinutes(30);
+        var clock = new ManualTimeProvider(Now);
+        var scopes = new SignallingScopeFactory(_provider.GetRequiredService<IServiceScopeFactory>());
+        var pruner = new InboxSweeper(
+            scopes,
+            TestMessagingOptions.For(new ConsumerOptions { ConsumerName = "orders", InboxRetention = interval }),
+            clock,
+            NullLogger<InboxSweeper>.Instance);
+
+        var passes = await new PollIntervalProbe(clock, interval).MeasureAsync(pruner.RunLoopAsync, () => scopes.Created);
+
+        passes.First.Should().BePositive();
+        passes.BeforeInterval.Should().Be(passes.First, "the interval has not passed on the injected clock");
+        passes.AfterInterval.Should().BeGreaterThan(passes.First, "the interval passed on the injected clock");
     }
 
     [Fact]

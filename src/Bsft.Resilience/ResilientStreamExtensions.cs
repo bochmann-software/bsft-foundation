@@ -110,7 +110,7 @@ public static class ResilientStreamExtensions
             var delay = options.DelayBeforeRetry(retriesUsed + 1);
 
             if (delay > TimeSpan.Zero)
-                await Task.Delay(delay, options.TimeProvider, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(delay, options.TimeProvider!, cancellationToken).ConfigureAwait(false);
         }
     }
 

@@ -1,4 +1,5 @@
 using Bsft.Core;
+using Bsft.Core.Persistence;
 using FluentAssertions;
 using Xunit;
 
@@ -32,6 +33,13 @@ public class BsftResilienceMediatorOptionsTests
         BsftResilienceMediatorOptions.IsTransientFailure(new NotFoundException("Entity", 1)).Should().BeFalse();
         BsftResilienceMediatorOptions.IsTransientFailure(new ForbiddenException("denied")).Should().BeFalse();
         BsftResilienceMediatorOptions.IsTransientFailure(new ConflictException("conflict")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsTransientFailure_WhenTheAmbientTransactionWasMisused_DoesNotRetryIt()
+    {
+        BsftResilienceMediatorOptions.IsTransientFailure(new AmbientTransactionMisuseException("swallowed", new TimeoutException()))
+            .Should().BeFalse();
     }
 
     [Fact]

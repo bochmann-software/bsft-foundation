@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading.RateLimiting;
-using Bsft.Correlation.DependencyInjection;
 using Bsft.Hosting.DependencyInjection;
 using Bsft.Tests.Shared;
 using FluentAssertions;
@@ -19,17 +18,23 @@ namespace Bsft.Hosting.Tests;
 
 public class RateLimiterReleaseTests
 {
+    /// <summary>How long a disposed host may stay reachable before the test calls it a leak.</summary>
+    private static readonly TimeSpan CollectTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long the thread pool gets between two attempts to collect a disposed host.</summary>
+    private static readonly TimeSpan CollectInterval = TimeSpan.FromMilliseconds(50);
+
     /// <summary>
-    /// A disposed host built with the Bsft defaults is collected. The rate limiting middleware's endpoint
+    /// A disposed host built with the Bsft rate limiting is collected. The rate limiting middleware's endpoint
     /// limiter runs a timer until it is disposed, and that timer held the middleware, the pipeline and the
     /// container of every stopped host for the rest of the process (dotnet/aspnetcore#66434).
     /// </summary>
     [Fact]
-    public async Task DisposedHost_WithTheBsftDefaults_IsCollected()
+    public async Task DisposedHost_WithTheBsftRateLimiting_IsCollected()
     {
         var services = await StartUseAndDisposeAsync(withGlobalLimiter: false);
 
-        Collect(services).Should().BeFalse("a disposed host must not stay reachable through a limiter's timer");
+        (await Collect(services)).Should().BeFalse("a disposed host must not stay reachable through a limiter's timer");
     }
 
     /// <summary>
@@ -41,7 +46,7 @@ public class RateLimiterReleaseTests
     {
         var services = await StartUseAndDisposeAsync(withGlobalLimiter: true);
 
-        Collect(services).Should().BeFalse("a disposed host must not stay reachable through its global limiter's timer");
+        (await Collect(services)).Should().BeFalse("a disposed host must not stay reachable through its global limiter's timer");
     }
 
     [Fact]
@@ -199,15 +204,41 @@ public class RateLimiterReleaseTests
         }
     }
 
-    private static bool Collect(WeakReference reference)
+    /// <summary>Whether <paramref name="reference"/> is still alive once nothing but a leak can hold its target.</summary>
+    /// <param name="reference">The reference to the disposed host's services.</param>
+    /// <returns><see langword="true"/> when something still holds the target after <see cref="CollectTimeout"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// The caller awaited <see cref="StartUseAndDisposeAsync"/>. When the helper's last await completed
+    /// asynchronously, the helper finishes on a thread-pool thread and runs the caller's continuation inline,
+    /// from inside its own <c>MoveNext</c>: this method then runs with the helper's state machine on the stack,
+    /// and that state machine still holds the host in its hoisted local. Collections made there can never
+    /// release the host. Whether the helper's last await completes synchronously depends on timing, which is
+    /// why the test failed only now and then. Yielding first lets that stack unwind, so the state machine is
+    /// done and cleared before the first collection.
+    /// </para>
+    /// <para>
+    /// The collection is then retried, with a pause for the thread pool, until <see cref="CollectTimeout"/>:
+    /// work the disposed host queued just before it stopped holds it only until that work ran. A leak holds
+    /// the container for good and is still reported, after the deadline.
+    /// </para>
+    /// </remarks>
+    private static async Task<bool> Collect(WeakReference reference)
     {
-        for (var attempt = 0; attempt < 10 && reference.IsAlive; attempt++)
+        await Task.Yield();
+
+        var deadline = DateTime.UtcNow + CollectTimeout;
+        while (true)
         {
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
             GC.WaitForPendingFinalizers();
-        }
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
 
-        return reference.IsAlive;
+            if (!reference.IsAlive || DateTime.UtcNow >= deadline)
+                return reference.IsAlive;
+
+            await Task.Delay(CollectInterval);
+        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -221,11 +252,8 @@ public class RateLimiterReleaseTests
                 webBuilder.ConfigureServices(services =>
                 {
                     services.AddLogging();
-                    services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
-                    services.AddBsftDefaults(defaults => defaults.DisableHttpsRedirection());
-                    services.AddBsftCorrelation();
+                    services.AddBsftRateLimiting();
                     services.AddRouting();
-                    services.AddEndpointsApiExplorer();
                     if (withGlobalLimiter)
                     {
                         services.AddOptions<RateLimiterOptions>().Configure<IServiceProvider>((options, provider) =>
@@ -236,7 +264,7 @@ public class RateLimiterReleaseTests
                 webBuilder.Configure(app =>
                 {
                     app.UseRouting();
-                    app.UseBsftDefaults();
+                    app.UseBsftRateLimiting();
                     app.UseEndpoints(endpoints => endpoints
                         .MapGet("/limited", () => Results.Ok())
                         .RequireRateLimiting(HostingDefaults.RateLimitingPolicyName));

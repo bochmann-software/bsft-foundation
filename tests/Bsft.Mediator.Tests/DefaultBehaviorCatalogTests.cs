@@ -109,4 +109,100 @@ public class DefaultBehaviorCatalogTests
         ranks[typeof(TracingBehavior<,>)].Should().Be(0);
         ranks[typeof(CachingBehavior<,>)].Should().BeGreaterThan(ranks[typeof(TransactionBehavior<,>)]);
     }
+
+    [Fact]
+    public void WithReplacement_ReturnsNewCatalog()
+    {
+        var catalog = new DefaultBehaviorCatalog();
+
+        var replaced = catalog.WithReplacement(MediatorDefaults.Caching, typeof(TestReplacementBehavior<,>));
+
+        replaced.Should().NotBeSameAs(catalog);
+    }
+
+    [Fact]
+    public void WithReplacement_LeavesOriginalUnchanged()
+    {
+        var catalog = new DefaultBehaviorCatalog();
+        var originalCachingDescriptor = catalog.FindSlot(MediatorDefaults.Caching)!;
+
+        catalog.WithReplacement(MediatorDefaults.Caching, typeof(TestReplacementBehavior<,>));
+
+        var cachingDescriptorNow = catalog.FindSlot(MediatorDefaults.Caching)!;
+        cachingDescriptorNow.TypeName.Should().Be(originalCachingDescriptor.TypeName);
+    }
+
+    [Fact]
+    public void WithReplacement_UpdatesTypeNameInReplacedCatalog()
+    {
+        var catalog = new DefaultBehaviorCatalog();
+
+        var replaced = catalog.WithReplacement(MediatorDefaults.Caching, typeof(TestReplacementBehavior<,>));
+
+        var descriptor = replaced.FindSlot(MediatorDefaults.Caching)!;
+        descriptor.TypeName.Should().Contain("TestReplacementBehavior");
+    }
+
+    [Fact]
+    public void WithReplacement_UpdatesRegistrationCallInReplacedCatalog()
+    {
+        var catalog = new DefaultBehaviorCatalog();
+
+        var replaced = catalog.WithReplacement(MediatorDefaults.Caching, typeof(TestReplacementBehavior<,>));
+
+        var descriptor = replaced.FindSlot(MediatorDefaults.Caching)!;
+        descriptor.RegistrationCall.Should().Contain("ReplaceDefaultBehavior");
+        descriptor.RegistrationCall.Should().Contain("TestReplacementBehavior");
+    }
+
+    [Fact]
+    public void WithReplacement_WithNullName_Throws()
+    {
+        var catalog = new DefaultBehaviorCatalog();
+
+        var act = () => catalog.WithReplacement(null!, typeof(TestReplacementBehavior<,>));
+
+        act.Should().Throw<ArgumentNullException>().WithParameterName("name");
+    }
+
+    [Fact]
+    public void WithReplacement_WithNullType_Throws()
+    {
+        var catalog = new DefaultBehaviorCatalog();
+
+        var act = () => catalog.WithReplacement(MediatorDefaults.Caching, null!);
+
+        act.Should().Throw<ArgumentNullException>().WithParameterName("behaviorType");
+    }
+
+    [Fact]
+    public void WithReplacement_PreservesOtherSlots()
+    {
+        var catalog = new DefaultBehaviorCatalog();
+
+        var replaced = catalog.WithReplacement(MediatorDefaults.Caching, typeof(TestReplacementBehavior<,>));
+
+        var tracingDescriptor = replaced.FindSlot(MediatorDefaults.Tracing)!;
+        tracingDescriptor.TypeName.Should().Be(catalog.FindSlot(MediatorDefaults.Tracing)!.TypeName);
+    }
+
+    [Fact]
+    public void WithReplacement_CanReplaceMultipleSlots()
+    {
+        var catalog = new DefaultBehaviorCatalog();
+
+        var replaced1 = catalog.WithReplacement(MediatorDefaults.Caching, typeof(TestReplacementBehavior<,>));
+        var replaced2 = replaced1.WithReplacement(MediatorDefaults.Retry, typeof(TestReplacementBehavior<,>));
+
+        replaced2.FindSlot(MediatorDefaults.Caching)!.TypeName.Should().Contain("TestReplacementBehavior");
+        replaced2.FindSlot(MediatorDefaults.Retry)!.TypeName.Should().Contain("TestReplacementBehavior");
+    }
+
+    private sealed class TestReplacementBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    {
+        public Task<TResponse> HandleAsync(TRequest request, Func<Task<TResponse>> next, CancellationToken cancellationToken = default)
+        {
+            return next();
+        }
+    }
 }

@@ -265,14 +265,23 @@ public class HealthCheckTests
     {
         // Exercises HealthChecksApplicationBuilderExtensions.UseBsftHealthChecks lines 25 and 36:
         // the predicate lambdas "_ => false" and "check => check.Tags.Contains("ready")" are invoked
-        // when ASP.NET Core processes a health check HTTP request.
+        // when ASP.NET Core processes a health check HTTP request. The checks are fakes because the
+        // outcome must not depend on the machine: a real disk check turns the readiness probe into
+        // a 503 on a box without free space. The untagged check is unhealthy so that a readiness
+        // predicate letting it through shows up in the status code as well as in its count.
+        var readinessCheck = new FakeHealthCheck(HealthCheckResult.Healthy());
+        var untaggedCheck = new FakeHealthCheck(HealthCheckResult.Unhealthy());
+
         using var host = await new Microsoft.Extensions.Hosting.HostBuilder()
             .ConfigureWebHost(webBuilder =>
             {
                 webBuilder.UseTestServer();
                 webBuilder.ConfigureServices(services =>
                 {
-                    services.AddBsftHealthChecks(cfg => cfg.AddDiskStorage(1));
+                    services.AddBsftHealthChecks();
+                    services.AddHealthChecks()
+                        .AddCheck("readiness", readinessCheck, tags: ["ready"])
+                        .AddCheck("untagged", untaggedCheck);
                     services.AddRouting();
                 });
                 webBuilder.Configure(app =>
@@ -285,14 +294,17 @@ public class HealthCheckTests
 
         var client = host.GetTestClient();
 
-        // Both requests exercise the predicate lambdas:
         // /health uses "_ => false" predicate (line 25) - runs no checks, always returns 200
         var healthResponse = await client.GetAsync("/health");
         healthResponse.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        readinessCheck.Invocations.Should().Be(0);
+        untaggedCheck.Invocations.Should().Be(0);
 
         // /health/ready uses "check => check.Tags.Contains("ready")" predicate (line 36)
         var readyResponse = await client.GetAsync("/health/ready");
         readyResponse.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        readinessCheck.Invocations.Should().Be(1);
+        untaggedCheck.Invocations.Should().Be(0);
     }
 
     [Fact]

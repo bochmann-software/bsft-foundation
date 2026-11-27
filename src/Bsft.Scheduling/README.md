@@ -28,6 +28,15 @@ services.AddBsftScheduling(options =>
 services.AddBsftScheduling(configuration);
 ```
 
+A host that only enqueues, such as an API beside a separate worker on the same run table, registers
+`services.AddBsftSchedulingProducer()` (or `AddBsftSchedulingProducer(configuration)`) instead: the
+scheduler and the store, with no dispatcher, no seeder and no hosted service, so it never claims a run.
+Point it at the same run store and stored-schedule catalog as the worker
+(`AddBsftSchedulingEFCore` and `AddBsftStoredSchedulesEFCore`); a producer on the in-memory catalog
+creates schedules the worker never sees. Keep `AddBsftSchedulingHealthCheck` on the worker. Combined with
+`AddBsftScheduling` in one container, the full registration wins for services and hosted services, and
+the options delegates of both run in call order.
+
 Every registered job also has named `BsftJobOptions` of its own, bound from
 `Bsft:Scheduling:Jobs:<job name>`, and the liveness health check is one call:
 
@@ -82,10 +91,13 @@ the existing dispatcher, executor and outcome policy need no awareness of it. Se
 | `BsftSchedulingOptions.InstanceId` | machine name plus a per-process suffix | The identifier recorded as the lease owner, so an operator can tell which process is sitting on a stuck run. |
 | `BsftSchedulingOptions.StoredScheduleSeedInterval` | `00:00:30` | How often the persisted schedule catalog is polled for due occurrences. |
 | `BsftSchedulingOptions.StoredScheduleBatchSize` | `50` | The most due stored schedules read per pass. |
+| `BsftSchedulingOptions.MaxResultBytes` | `4096` | The largest run result a job may record, in UTF-8 bytes of its JSON (at most 64 KiB). A larger one is refused in the job's own call with `PayloadTooLargeException` (`SCHEDULING_RESULT_TOO_LARGE`) and nothing is recorded. |
+| `BsftSchedulingOptions.JobRunRetention` | unset | How long a settled run is kept by `AddBsftJobRunEFCoreRetention()` (`Bsft.Scheduling.EFCore`); unset keeps every run. Must be positive where set. |
+| `BsftSchedulingOptions.JobRunRetentionKeepLatest` | `0` | How many of each job's latest settled runs that pass spares whatever their age. Must not be negative. |
 
 Validation: `ValidateOnStart()` rejects a `BatchSize` or `MaxAttempts` below one, a non-positive
 `PollInterval`, `RecurringSeedInterval` or `LeaseDuration`, a negative `RetryDelay` or `MaxCatchUpAge`,
-and a blank `InstanceId` — all of them reported in one message rather than one restart at a time. A
+a `MaxResultBytes` below one or above 64 KiB, a non-positive `JobRunRetention` where set, a negative `JobRunRetentionKeepLatest`, and a blank `InstanceId` — all of them reported in one message rather than one restart at a time. A
 zero `RetryDelay` and a zero `MaxCatchUpAge` are legitimate and pass.
 
 ## Extend

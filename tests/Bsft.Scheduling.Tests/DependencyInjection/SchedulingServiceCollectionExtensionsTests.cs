@@ -1,4 +1,6 @@
-﻿using Bsft.Scheduling.Tests.Fakes;
+﻿using Bsft.Tests.Shared;
+using Bsft.Core.Tenancy;
+using Bsft.Scheduling.Tests.Fakes;
 using Bsft.Scheduling.Tests.Support;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -6,6 +8,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using NSubstitute;
 using Xunit;
 using Bsft.Scheduling.DependencyInjection;
 using Bsft.Scheduling.Diagnostics;
@@ -367,5 +370,141 @@ public class SchedulingServiceCollectionExtensionsTests
 
         ((Action)(() => services.AddBsftSchedulingHealthCheck()))
             .Should().Throw<ArgumentNullException>().WithParameterName("services");
+    }
+
+    [Fact]
+    public async Task AddBsftScheduling_WithABackgroundTenantSource_DispatcherListsOncePerTenant()
+    {
+        var listedFor = new List<string?>();
+        var store = Substitute.For<IJobStore>();
+        store.ListClaimableAsync(Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                lock (listedFor)
+                    listedFor.Add(BackgroundTenant.Current);
+                return Task.FromResult<IReadOnlyList<JobRun>>([]);
+            });
+
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        using var provider = Build(s =>
+        {
+            s.AddSingleton<IJobStore>(store);
+            s.AddSingleton<IBackgroundTenantSource>(new FakeBackgroundTenantSource(["a", "b"]));
+            s.AddBsftScheduling();
+            s.AddSingleton<TimeProvider>(clock);
+        });
+
+        var dispatcher = provider.GetServices<IHostedService>().OfType<JobDispatcher>().Single();
+        await RunDispatcherFirstPassAsync(dispatcher, clock);
+
+        Snapshot(listedFor).Take(2).Should().Equal(["a", "b"]);
+    }
+
+    [Fact]
+    public async Task AddBsftScheduling_WithoutABackgroundTenantSource_DispatcherListsWithoutATenant()
+    {
+        var listedFor = new List<string?>();
+        var store = Substitute.For<IJobStore>();
+        store.ListClaimableAsync(Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                lock (listedFor)
+                    listedFor.Add(BackgroundTenant.Current);
+                return Task.FromResult<IReadOnlyList<JobRun>>([]);
+            });
+
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        using var provider = Build(s =>
+        {
+            s.AddSingleton<IJobStore>(store);
+            s.AddBsftScheduling();
+            s.AddSingleton<TimeProvider>(clock);
+        });
+
+        var dispatcher = provider.GetServices<IHostedService>().OfType<JobDispatcher>().Single();
+        await RunDispatcherFirstPassAsync(dispatcher, clock);
+
+        Snapshot(listedFor).Should().NotBeEmpty().And.OnlyContain(tenant => tenant == null);
+    }
+
+    [Fact]
+    public async Task AddBsftScheduling_WithATenantScopeFactory_ExecutorUsesTheFactory()
+    {
+        var createdFor = new List<string>();
+        var tenantScopes = Substitute.For<ITenantScopeFactory>();
+        var tenantScope = Substitute.For<ITenantScope>();
+        var jobProvider = Substitute.For<IServiceProvider>();
+        var job = Substitute.For<IJob>();
+
+        tenantScope.ServiceProvider.Returns(jobProvider);
+        tenantScopes.CreateScope(Arg.Any<string>())
+            .Returns(x =>
+            {
+                createdFor.Add(x.Arg<string>());
+                return tenantScope;
+            });
+
+        // Setup CreateScopeAsync to delegate to CreateScope (matching the default interface implementation)
+        tenantScopes.CreateScopeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(x =>
+            {
+                var scope = tenantScopes.CreateScope(x.Arg<string>());
+                return new ValueTask<ITenantScope>(scope);
+            });
+
+        jobProvider.GetService(typeof(RecordingJob)).Returns(job);
+
+        using var provider = Build(s =>
+        {
+            s.AddSingleton(tenantScopes);
+            s.AddBsftScheduling().AddBsftJob<RecordingJob>();
+        });
+
+        var executor = provider.GetRequiredService<IJobExecutor>();
+        var run = new JobRun { Id = 1, JobName = typeof(RecordingJob).FullName!, DueAt = DateTimeOffset.UtcNow, AttemptCount = 0, LeaseExpiresAt = DateTimeOffset.UtcNow.AddHours(1) };
+
+        using (new BackgroundTenant("tenant-x"))
+        {
+            await executor.ExecuteAsync(typeof(RecordingJob), run);
+        }
+
+        createdFor.Should().Equal(["tenant-x"]);
+    }
+
+    [Fact]
+    public async Task AddBsftScheduling_WithoutATenantScopeFactory_ExecutorUsesAPlainScope()
+    {
+        using var provider = Build(s => s.AddBsftScheduling().AddBsftJob<RecordingJob>());
+
+        var executor = provider.GetRequiredService<IJobExecutor>();
+        var scope = provider.CreateScope();
+        var job = scope.ServiceProvider.GetRequiredService<RecordingJob>();
+        var run = new JobRun { Id = 1, JobName = typeof(RecordingJob).FullName!, DueAt = DateTimeOffset.UtcNow, AttemptCount = 0, LeaseExpiresAt = DateTimeOffset.UtcNow.AddHours(1) };
+
+        using (new BackgroundTenant("tenant-x"))
+        {
+            await executor.ExecuteAsync(typeof(RecordingJob), run);
+        }
+
+        // Should complete without calling a tenant scope factory
+    }
+
+    /// <summary>Runs the dispatcher's loop, which is where the passes are split per tenant, until its first pass is done.</summary>
+    private static async Task RunDispatcherFirstPassAsync(JobDispatcher dispatcher, ManualTimeProvider clock)
+    {
+        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var loop = dispatcher.RunLoopAsync(stopping.Token);
+
+        // The first pass is complete once the loop waits out its interval on the manual clock.
+        await await Task.WhenAny(clock.WaitForAnyTimerAsync(), loop);
+
+        await stopping.CancelAsync();
+        await loop;
+    }
+
+    private static List<string?> Snapshot(List<string?> list)
+    {
+        lock (list)
+            return [..list];
     }
 }

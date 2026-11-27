@@ -89,6 +89,10 @@ export const RULES = {
     cite: 'PC 5; PC 6 step 5',
     text: 'Every package also appears in packages.md, which maps each package to the topic page that documents it and to its entry point.',
   },
+  'packages-unreleased': {
+    cite: 'PC 5',
+    text: 'A package that is in the solution but does not ship yet sets `<IsPackable>false</IsPackable>`, and its row\'s entry point says `(unreleased)`; a packable package\'s row never does, so the two switch together.',
+  },
   'one-type-per-file': {
     cite: 'PC 4',
     text: 'One top-level type per file, file named after the type.',
@@ -437,6 +441,15 @@ export function runChecks(repo, { solution, foundationSolution, packagesMd, grap
     const packages = new Set([...src.map((p) => p.name), ...(repo.templatePackages ?? [])]);
     for (const name of [...packages].sort()) if (!rows.has(name)) report('packages-md', 'docs/packages.md', `has no row for ${name}.`);
     for (const name of [...rows].sort()) if (!packages.has(name)) report('packages-md', 'docs/packages.md', `has a row for ${name}, which is not a package.`);
+
+    // PC 5: a row says `(unreleased)` exactly when its project is not packable.
+    const unreleased = new Set(
+      [...packagesMd.matchAll(/^\|\s*`(Bsft(?:\.[A-Za-z0-9_]+)*)`\s*\|.*\(unreleased\).*$/gm)].map((m) => m[1]));
+    for (const p of [...src].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!rows.has(p.name)) continue;
+      if (!p.isPackable && !unreleased.has(p.name)) report('packages-unreleased', p.csproj, `is not packable, but its docs/packages.md row does not say (unreleased).`);
+      if (p.isPackable && unreleased.has(p.name)) report('packages-unreleased', p.csproj, `is packable, but its docs/packages.md row says (unreleased).`);
+    }
   } else {
     skipped.push('packages-md (no docs/packages.md)');
   }

@@ -4,7 +4,7 @@ namespace Bsft.Idempotency;
 /// What an audit sink is being told about.
 /// </summary>
 /// <remarks>
-/// Only the three decisions worth an operator's attention are reported. A request that simply ran is
+/// Only the decisions worth an operator's attention are reported. A request that simply ran is
 /// not one of them: that is the ordinary case and auditing it would double the write volume of every
 /// protected endpoint for no signal.
 /// </remarks>
@@ -21,4 +21,10 @@ public enum IdempotencyAuditAction
 
     /// <summary>A request was refused because the first request under its key was still running.</summary>
     InProgress = 2,
+
+    /// <summary>
+    /// A request was repeated whose stored response carried a secret that could not be decrypted, so
+    /// nothing was replayed and the caller was told to rotate the secret instead.
+    /// </summary>
+    ResponseWithheld = 3,
 }

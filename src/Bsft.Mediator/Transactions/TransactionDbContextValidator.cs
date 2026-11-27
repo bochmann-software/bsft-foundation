@@ -1,4 +1,5 @@
 using Bsft.Core;
+using Bsft.Core.Persistence;
 using Bsft.Mediator.StartupValidation;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -21,6 +22,11 @@ namespace Bsft.Mediator.Transactions;
 /// permission, rather than inferring silently on the first dispatch. The single-context case resolves
 /// silently; an explicit base <c>DbContext</c> registration wins; only the genuinely ambiguous host
 /// is stopped, and it is told to register the base <c>DbContext</c> explicitly.
+/// <para>
+/// A host that registered an <see cref="IAmbientTransaction"/> — the shared transaction of
+/// <c>Bsft.Data</c> — is not checked: the behavior then runs every transactional request in that
+/// transaction, which spans every enlisted context, and resolves no <c>DbContext</c> to choose between.
+/// </para>
 /// </remarks>
 public sealed class TransactionDbContextValidator : IStartupValidator
 {
@@ -61,6 +67,10 @@ public sealed class TransactionDbContextValidator : IStartupValidator
         if (!_registrations.IsRegistered(TransactionBehaviorType))
             return Task.FromResult(StartupValidationResult.Success(
                 "TransactionBehavior is not in the pipeline; the DbContext registration is not checked."));
+
+        if (_services.Any(descriptor => descriptor.ServiceType == typeof(IAmbientTransaction)))
+            return Task.FromResult(StartupValidationResult.Success(
+                "TransactionBehavior runs in the shared transaction across every enlisted DbContext; the DbContext registration is not checked."));
 
         var ambiguous = _resolver.ListAmbiguousContexts(_services);
         if (ambiguous.Count == 0)

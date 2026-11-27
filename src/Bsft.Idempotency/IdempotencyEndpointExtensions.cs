@@ -54,4 +54,26 @@ public static class IdempotencyEndpointExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// Marks the response of every endpoint the builder covers as carrying a secret, so the copy stored
+    /// for replay is encrypted at rest and a replay that cannot decrypt it answers 409 instead.
+    /// </summary>
+    /// <typeparam name="TBuilder">The route or group builder.</typeparam>
+    /// <param name="builder">The builder to add the metadata to.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <remarks>
+    /// Adds to <see cref="RequireIdempotency{TBuilder}"/> or <see cref="RequireIdempotencyKey{TBuilder}"/>
+    /// rather than replacing them; see <see cref="SensitiveIdempotentResponseAttribute"/>.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is null.</exception>
+    public static TBuilder WithSensitiveResponse<TBuilder>(this TBuilder builder)
+        where TBuilder : IEndpointConventionBuilder
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.WithMetadata(new SensitiveIdempotentResponseAttribute());
+
+        return builder;
+    }
 }

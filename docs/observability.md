@@ -91,6 +91,7 @@ These names are a stable public contract.
 | `Bsft.Saga` | Saga start, steps, completion, and durable timeouts. |
 | `Bsft.Data` | Full-text search execution (registered by `AddBsftDataQueryFiltering`). |
 | `Bsft.Scheduling` | Job enqueue, claim and execution (registered by `AddBsftScheduling`). |
+| `Bsft.Templating` | Template compilation and rendering limits (registered by `AddBsftTemplating`). |
 
 ### Metrics
 
@@ -112,10 +113,23 @@ These names are a stable public contract.
 | `bsft.job.claimed` | Counter | | `job.name` |
 | `bsft.job.skipped` | Counter | | `job.name` |
 | `bsft.job.execution.duration` | Histogram | s | `job.name`, `outcome` |
+| `bsft.templating.limit.exceeded` | Counter | | `templating.profile`, `templating.limit` |
+| `bsft.templating.render.disposal.duration` | Histogram | s | `templating.seam` |
 
 `outcome` is one of `success`, `expected_error`, `error` (mediator) or `executed`, `skipped` (saga).
 Expected framework exceptions (`BsftException` and its subtypes) are recorded as `expected_error`
 and do **not** mark the span as an error or increment `bsft.mediator.failures`.
+
+`templating.profile` is a registered templating profile's name or `default`, and `templating.limit`
+the option name of the limit a compilation or a render exceeded (`MaxOutputLength`,
+`MaxDiagnostics`, …). `templating.seam` is the host seam whose sequence a render disposed: `member`
+(a model's sequence or a member getter), `partial`, `escaper` or `dialect`. Template names, template text
+and model values are never tags.
+
+A render that disposes a sequence slower than its own render timeout logs `TemplateSlowDisposals`
+(event 10, warning) once, with the count, the longest duration and its seam. A disposal that fails while
+the render is already reporting an earlier failure is dropped and logged as
+`TemplateDisposalFailureDropped` (event 9, warning), so it never masks the first error.
 
 ### Span attributes
 

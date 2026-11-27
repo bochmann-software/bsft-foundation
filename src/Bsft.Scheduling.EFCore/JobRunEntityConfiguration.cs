@@ -70,6 +70,10 @@ public sealed class JobRunEntityConfiguration : IEntityTypeConfiguration<JobRunE
         builder.Property(e => e.LeaseOwner).HasMaxLength(IdentifierMaxLength);
         builder.Property(e => e.CorrelationId).HasMaxLength(IdentifierMaxLength);
 
+        // The result is bounded where it is recorded (BsftSchedulingOptions.MaxResultBytes), so its
+        // column stays unbounded like the payload's; only the schema name has a width of its own.
+        builder.Property(e => e.ResultSchema).HasMaxLength(JobRunResult.MaxSchemaLength);
+
         // The dispatcher polls by status and due date on every pass, so this index carries the
         // hottest query in the package. The id closes the key because the poll orders by DueAt and
         // then by Id: with the tie-breaker in the index a batch streams off it, without one a backlog

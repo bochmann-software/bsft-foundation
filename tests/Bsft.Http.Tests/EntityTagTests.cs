@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Xunit;
+using Bsft.Core;
 
 namespace Bsft.Http.Tests;
 

@@ -1,3 +1,4 @@
+using Bsft.Core.Hosting;
 using Bsft.Hosting.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -55,6 +56,15 @@ public static class HealthChecksServiceCollectionExtensions
             builder.Add(new HealthCheckRegistration(
                 $"disk-storage-{registration.MinFreeMb}mb",
                 _ => new DiskStorageHealthCheck(registration.MinFreeMb),
+                failureStatus: null,
+                tags: ["ready"]));
+        }
+
+        if (config.IncludesStartGateCheck)
+        {
+            builder.Add(new HealthCheckRegistration(
+                "hosted-work-start-gates",
+                sp => new HostedWorkStartGateHealthCheck(sp.GetServices<IHostedWorkStartGate>()),
                 failureStatus: null,
                 tags: ["ready"]));
         }

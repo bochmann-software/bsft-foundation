@@ -347,6 +347,21 @@ ignore:
   # express it because it gives no handle on the root to dispose.
   - { rule: service-provider-injected-into-service, match: "Bsft.Testing.Mediation.MediatorTestHarness" }
   - { rule: service-provider-injected-into-service, match: "Bsft.Testing.Sagas.SagaTestHarness" }
+  # The root provider is what this type checks against, by reference, and it never resolves
+  # anything from it: a context whose options are built from the root provider (a pooled context,
+  # a context factory) would share one connection and one transaction across every request, and
+  # the options callback can only tell by comparing the provider it is handed with the root one.
+  # There is no dependency to declare instead; a predicate closing over the provider would hide
+  # the same reference behind a delegate. The proper fix is a change to the CodeCharter rule:
+  # skip a provider the type only compares or null-checks and never resolves from.
+  - { rule: service-provider-injected-into-service, match: "Bsft.Data.Transactions.SharedTransactionRoot" }
+
+  # async-naming on a delegate: the method the rule sees is the delegate's Invoke, which the
+  # compiler names and C# cannot rename. The delegate type itself names the attempt: a behavior
+  # passes it to RunAsync / RunInNewScopeAsync of IPipelineContinuation, and the mediator invokes
+  # it. Scoped to this one delegate. The proper fix is a change to the CodeCharter rule: exempt
+  # the compiler-generated Invoke of a delegate.
+  - { rule: async-naming, match: "Bsft.Mediator.PipelineAttempt<TResponse>.Invoke" }
 
   # too-many-ctor-params on the two saga types is the direct consequence of fixing
   # service-provider-injected-into-service on them, and the two rules cannot both be
@@ -399,21 +414,6 @@ ignore:
 
 scopes:
 
-  # --- security-sql-injection: the LISTEN statement -----------------------------
-  # CA2100 flags the LISTEN command, which is built by concatenation because LISTEN
-  # takes an identifier and no provider parameterises one; the write side sends its
-  # half through pg_notify precisely because that call does take the channel as a
-  # parameter. The name is quoted, and it is constrained to lower-case letters,
-  # digits and underscores by PostgresListenStatement, which owns that grammar,
-  # guards its own For() with it and is what BsftMessagingPostgresOptionsValidator
-  # calls at start-up. No character is left in the alphabet that could end the quoted
-  # identifier early. CA2100 is a taint analysis and cannot see a guard that throws,
-  # so the finding stands however the check is arranged.
-  - match:
-      - "src/Bsft.Messaging.EFCore.Postgres/PostgresOutboxNotificationChannel.cs"
-    ignore:
-      - { rule: security-sql-injection }
-
   # --- generic-exception-catch: log and rethrow ---------------------------------
   # These five do precisely what the rule's own recommendation prescribes for a
   # legitimate boundary: log the failure and rethrow it with a bare `throw;` so the
@@ -434,6 +434,22 @@ scopes:
       # application may implement over any provider, so this assembly cannot name the
       # exception types it throws. Cancellation is kept separate by the
       # `when (ex is not OperationCanceledException)` filter on both catches.
+    ignore:
+      - { rule: generic-exception-catch }
+
+
+  # --- generic-exception-catch: the shared transaction's step observers ---------
+  # SharedTransactionStepReporter calls the host's ISharedTransactionStepObserver around the
+  # connection steps the shared transaction runs itself. The observer is a host type
+  # (a consuming application's session guard throws its own exception type), so this assembly
+  # cannot name what it throws. Two catches are needed, and nothing is swallowed: a refusal of a
+  # step that ends the unit (Rollback, Release, Close) must not stop that step, so the transaction
+  # is always released and the connection always closed, and an exception from OnStepCompleted must
+  # not change the unit's outcome. Each is logged as a warning, the same boundary as AIUsagePublisher
+  # and PasswordPolicy above. A refusal of a step that can be left out is not caught at all and
+  # propagates unchanged; SharedTransaction.cs itself holds no catch-all. Scoped to this one
+  # file.
+  - match: "src/Bsft.Data/Transactions/SharedTransactionStepReporter.cs"
     ignore:
       - { rule: generic-exception-catch }
 
@@ -620,7 +636,7 @@ scopes:
   # host-authored IStartupValidator throws — including out of its own constructor's or ValidateAsync's
   # resolution of scoped dependencies — into a StartupValidationResult.Failure naming that validator,
   # rather than letting it crash the host outright. There is nothing further out to rethrow to: this
-  # is the boundary every other validator's own catch (see TemplateContractStartupValidator above)
+  # is the boundary every other validator's own catch (see TokenTemplateContract above)
   # already assumes exists. A bare `throw;` here would defeat the type's entire purpose, which is
   # exactly to keep one validator's bug from stopping every other registered validator from still
   # running and being reported. Cancellation is filtered out ahead of it, so a genuinely cancelled

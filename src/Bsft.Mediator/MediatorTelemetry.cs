@@ -18,6 +18,7 @@ internal sealed class MediatorTelemetry : IMediatorTelemetry
     private const string Failures = "bsft.mediator.failures";
 
     private readonly IInstrumentationSource _source;
+    private readonly TimeProvider _timeProvider;
     private readonly Histogram<double> _duration;
     private readonly Counter<long> _requests;
     private readonly Counter<long> _failures;
@@ -26,10 +27,13 @@ internal sealed class MediatorTelemetry : IMediatorTelemetry
     /// Initializes a new instance of the <see cref="MediatorTelemetry"/> class.
     /// </summary>
     /// <param name="sources">The instrumentation source provider.</param>
-    public MediatorTelemetry(IInstrumentationSourceProvider sources)
+    /// <param name="timeProvider">The clock a dispatch's duration is measured on.</param>
+    public MediatorTelemetry(IInstrumentationSourceProvider sources, TimeProvider timeProvider)
     {
         if (sources is null)
             throw new ArgumentNullException(nameof(sources));
+
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
 
         _source = sources.Get(SourceName);
         _duration = _source.GetOrCreateHistogram(RequestDuration, "s");
@@ -49,7 +53,7 @@ internal sealed class MediatorTelemetry : IMediatorTelemetry
                 activity.SetTag("correlation_id", correlationId);
         }
 
-        return new RequestTelemetryScope(this, activity, requestName);
+        return new RequestTelemetryScope(this, _timeProvider, activity, requestName);
     }
 
     /// <inheritdoc />
@@ -62,7 +66,7 @@ internal sealed class MediatorTelemetry : IMediatorTelemetry
             activity.SetTag("bsft.handler_count", handlerCount);
         }
 
-        return new RequestTelemetryScope(this, activity, notificationName);
+        return new RequestTelemetryScope(this, _timeProvider, activity, notificationName);
     }
 
     /// <summary>

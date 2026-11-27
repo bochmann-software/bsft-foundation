@@ -121,4 +121,57 @@ public class BsftLocalizationOptionsValidatorTests
 
         validator.Validate("named", new BsftLocalizationOptions()).Succeeded.Should().BeTrue();
     }
+
+    [Fact]
+    public void Defaults_MissCacheIsTenThousandEntriesForThirtySeconds()
+    {
+        var options = new BsftLocalizationOptions();
+
+        options.MissCacheMaxEntries.Should().Be(10_000);
+        options.MissCacheLifetime.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_ANonPositiveMissCacheBound_IsRefused(int entries)
+    {
+        var act = () => new BsftLocalizationOptions { MissCacheMaxEntries = entries }.Validate();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*MissCacheMaxEntries*");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_ANonPositiveMissCacheLifetime_IsRefused(int seconds)
+    {
+        var act = () => new BsftLocalizationOptions { MissCacheLifetime = TimeSpan.FromSeconds(seconds) }.Validate();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*MissCacheLifetime*");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_ANonPositiveMaxKeyLength_IsRefused(int length)
+    {
+        var act = () => new BsftLocalizationOptions { MaxKeyLength = length }.Validate();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*MaxKeyLength*");
+    }
+
+    [Fact]
+    public void Defaults_MaxKeyLengthIs256()
+    {
+        new BsftLocalizationOptions().MaxKeyLength.Should().Be(256);
+    }
+
+    [Fact]
+    public void Validate_APositiveMissCacheLifetime_IsAccepted()
+    {
+        var act = () => new BsftLocalizationOptions { MissCacheLifetime = TimeSpan.FromTicks(1) }.Validate();
+
+        act.Should().NotThrow();
+    }
 }

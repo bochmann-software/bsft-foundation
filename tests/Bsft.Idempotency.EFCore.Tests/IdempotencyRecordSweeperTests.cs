@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using Xunit;
 using Bsft.Idempotency.EFCore.Tests.Fakes;
 using Bsft.Idempotency.EFCore.Tests.Support;
+using Bsft.Tests.Shared;
 
 namespace Bsft.Idempotency.EFCore.Tests;
 
@@ -323,6 +324,25 @@ public sealed class IdempotencyRecordSweeperTests : IDisposable
 
         await act.Should().NotThrowAsync();
         reported.Reached.IsCompletedSuccessfully.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunLoopAsync_WaitsTheRetentionOnTheInjectedClock()
+    {
+        var interval = TimeSpan.FromMinutes(30);
+        var clock = new ManualTimeProvider(Now);
+        var scopes = new SignallingScopeFactory(_provider.GetRequiredService<IServiceScopeFactory>());
+        var pruner = new IdempotencyRecordSweeper(
+            scopes,
+            Options.Create(new BsftIdempotencyOptions { Retention = interval }),
+            clock,
+            NullLogger<IdempotencyRecordSweeper>.Instance);
+
+        var passes = await new PollIntervalProbe(clock, interval).MeasureAsync(pruner.RunLoopAsync, () => scopes.Created);
+
+        passes.First.Should().BePositive();
+        passes.BeforeInterval.Should().Be(passes.First, "the interval has not passed on the injected clock");
+        passes.AfterInterval.Should().BeGreaterThan(passes.First, "the interval passed on the injected clock");
     }
 
     [Fact]

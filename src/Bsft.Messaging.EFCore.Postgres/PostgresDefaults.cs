@@ -1,3 +1,5 @@
+using Bsft.Outbox.Postgres;
+
 namespace Bsft.Messaging.EFCore.Postgres;
 
 /// <summary>
@@ -18,5 +20,5 @@ public static class PostgresDefaults
     /// which is 63 characters in a stock server, and a truncated <c>LISTEN</c> would silently stop
     /// matching the <c>pg_notify</c> the writer sends.
     /// </summary>
-    public const int MaxNotificationChannelLength = 63;
+    public const int MaxNotificationChannelLength = PostgresNotificationChannel.MaxLength;
 }

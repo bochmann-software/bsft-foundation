@@ -1,4 +1,5 @@
 using Bsft.Core.Polling;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Xunit;
 
@@ -6,11 +7,14 @@ namespace Bsft.Core.Tests.Polling;
 
 public sealed class PollLoopTests : IDisposable
 {
-    private static readonly TimeSpan ShortInterval = TimeSpan.FromMilliseconds(1);
+    // No wait at all, for the tests about how a pass is read rather than about the wait after it.
+    private static readonly TimeSpan ShortInterval = TimeSpan.Zero;
 
-    // Long enough that a loop which waits cannot possibly run a second pass within the test, so a
-    // second pass proves the wait was skipped rather than merely short.
+    // The loop waits on the manual clock, which only a test moves, so a loop that waits cannot run a
+    // second pass within the test and a second pass proves the wait was skipped rather than merely short.
     private static readonly TimeSpan EndlessInterval = TimeSpan.FromMinutes(10);
+
+    private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
 
     private readonly RecordingReporter _reporter = new();
     private readonly CancellationTokenSource _stopping = new();
@@ -212,14 +216,54 @@ public sealed class PollLoopTests : IDisposable
         _reporter.Stopping.Should().Be(1);
     }
 
-    [Fact]
-    public void The_loop_rejects_a_missing_pass_or_reporter()
+    [Theory]
+    [InlineData("finished")]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public async Task The_wait_after_a_pass_runs_on_the_injected_clock(string ending)
     {
-        var withoutPass = () => new PollLoop(null!, _reporter, ShortInterval);
-        var withoutReporter = () => new PollLoop(_ => FinishAsync(PollPassOutcome.PollAgain), null!, ShortInterval);
+        // The interval is measured by the service's TimeProvider, not by the machine's clock: the next
+        // pass starts when that clock has moved by the interval, and not a tick before. A pass that
+        // failed, or was cancelled by a token of its own, waits the same interval before the next try.
+        var secondPass = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var loop = RunAsync(
+            _ =>
+            {
+                if (_passes == 2)
+                    secondPass.TrySetResult();
+
+                return ending switch
+                {
+                    "finished" => FinishAsync(PollPassOutcome.WaitForInterval),
+                    "failed" => ThrowAsync(new InvalidOperationException("the store is unreachable")),
+                    _ => ThrowAsync(new OperationCanceledException("the store call timed out")),
+                };
+            },
+            EndlessInterval,
+            stopAfter: 2);
+
+        await _clock.WaitForTimerAsync(EndlessInterval);
+        _clock.Advance(EndlessInterval - TimeSpan.FromTicks(1));
+        _passes.Should().Be(1);
+
+        _clock.Advance(TimeSpan.FromTicks(1));
+        await secondPass.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await loop.WaitAsync(TimeSpan.FromSeconds(30));
+
+        _passes.Should().Be(2);
+    }
+
+    [Fact]
+    public void The_loop_rejects_a_missing_pass_reporter_or_clock()
+    {
+        var withoutPass = () => new PollLoop(null!, _reporter, ShortInterval, _clock);
+        var withoutReporter = () => new PollLoop(_ => FinishAsync(PollPassOutcome.PollAgain), null!, ShortInterval, _clock);
+        var withoutClock = () => new PollLoop(_ => FinishAsync(PollPassOutcome.PollAgain), _reporter, ShortInterval, null!);
 
         withoutPass.Should().Throw<ArgumentNullException>().WithParameterName("pass");
         withoutReporter.Should().Throw<ArgumentNullException>().WithParameterName("reporter");
+        withoutClock.Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
     }
 
     /// <summary>
@@ -241,7 +285,8 @@ public sealed class PollLoopTests : IDisposable
                 return pass(ct);
             },
             _reporter,
-            interval).RunAsync(_stopping.Token);
+            interval,
+            _clock).RunAsync(_stopping.Token);
 
     /// <summary>
     /// A pass that ends in <paramref name="failure"/>. It is thrown out of an async method rather than

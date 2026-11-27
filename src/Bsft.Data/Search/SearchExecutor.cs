@@ -1,6 +1,5 @@
 using Bsft.Data.Filtering;
 using Bsft.Data.Contracts.Search;
-using System.Diagnostics;
 using System.Linq.Expressions;
 using Bsft.Data.Contracts.Pagination;
 using Bsft.Data.Diagnostics;
@@ -26,6 +25,7 @@ public sealed class SearchExecutor<TEntity, TDto> : ISearchExecutor<TEntity, TDt
     private readonly ISearchProvider? _searchProvider;
     private readonly ISearchScopeProvider? _scopeProvider;
     private readonly IDataTelemetry _telemetry;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SearchExecutor{TEntity, TDto}"/> class.
@@ -37,6 +37,7 @@ public sealed class SearchExecutor<TEntity, TDto> : ISearchExecutor<TEntity, TDt
     /// provider, so the dependency is optional here and refused only when a search is attempted.
     /// </param>
     /// <param name="telemetry">Telemetry sink for search metrics.</param>
+    /// <param name="timeProvider">The clock the search duration is measured on.</param>
     /// <param name="scopeProvider">
     /// The visibility boundary for the current request, or <see langword="null"/> when the
     /// application registers none. A null provider is refused for every group that is not declared
@@ -46,11 +47,13 @@ public sealed class SearchExecutor<TEntity, TDto> : ISearchExecutor<TEntity, TDt
     public SearchExecutor(
         CompiledSearchConfiguration<TEntity, TDto> configuration,
         IDataTelemetry telemetry,
+        TimeProvider timeProvider,
         ISearchProvider? searchProvider = null,
         ISearchScopeProvider? scopeProvider = null)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _telemetry = telemetry ?? throw new ArgumentNullException(nameof(telemetry));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _searchProvider = searchProvider;
         _scopeProvider = scopeProvider;
 
@@ -84,7 +87,7 @@ public sealed class SearchExecutor<TEntity, TDto> : ISearchExecutor<TEntity, TDt
                 + "Add a provider package such as Bsft.Data.SqlServer.");
         }
 
-        var started = Stopwatch.GetTimestamp();
+        var started = _timeProvider.GetTimestamp();
 
         // Scoping happens before the provider sees the queryable, so no provider implementation can
         // return a row the caller may not see.
@@ -105,7 +108,7 @@ public sealed class SearchExecutor<TEntity, TDto> : ISearchExecutor<TEntity, TDt
         var pageSize = Math.Min(request.PageSize, _configuration.MaxPageSize);
         var result = await hits.ToPagedResultAsync(request.Page, pageSize, cancellationToken).ConfigureAwait(false);
 
-        _telemetry.SearchCompleted(group.Name, Stopwatch.GetElapsedTime(started).TotalSeconds, result.TotalCount);
+        _telemetry.SearchCompleted(group.Name, _timeProvider.GetElapsedTime(started).TotalSeconds, result.TotalCount);
         return result;
     }
 

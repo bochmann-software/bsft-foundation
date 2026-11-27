@@ -19,6 +19,7 @@
          own. This package's dependency closure is empty, so it stays a contract reference. -->
     <ProjectReference Include="..\Bsft.Data.Contracts\Bsft.Data.Contracts.csproj" />
     <ProjectReference Include="..\Bsft.Instrumentation\Bsft.Instrumentation.csproj" />
+    <ProjectReference Include="..\Bsft.Hosting.StartGates\Bsft.Hosting.StartGates.csproj" />
   </ItemGroup>
 
   <ItemGroup>

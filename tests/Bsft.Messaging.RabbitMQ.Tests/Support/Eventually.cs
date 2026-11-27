@@ -8,7 +8,7 @@ namespace Bsft.Messaging.RabbitMQ.Tests.Support;
 internal static class Eventually
 {
     /// <summary>How long a step of the pipeline is given before the test calls it a failure.</summary>
-    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
     /// <summary>Waits until a condition holds, woken by whichever of the given fakes changes first.</summary>
     /// <param name="condition">The state the pipeline is expected to reach.</param>

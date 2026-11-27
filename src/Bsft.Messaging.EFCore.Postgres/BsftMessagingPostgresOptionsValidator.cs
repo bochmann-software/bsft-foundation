@@ -1,3 +1,4 @@
+using Bsft.Outbox.Postgres;
 using Microsoft.Extensions.Options;
 
 namespace Bsft.Messaging.EFCore.Postgres;
@@ -22,7 +23,7 @@ internal sealed class BsftMessagingPostgresOptionsValidator : IValidateOptions<B
 
         var failures = new List<string>();
 
-        if (!PostgresListenStatement.IsValidChannel(options.NotificationChannel))
+        if (!PostgresNotificationChannel.IsValid(options.NotificationChannel))
             failures.Add(
                 $"{nameof(BsftMessagingPostgresOptions.NotificationChannel)} must be 1 to {PostgresDefaults.MaxNotificationChannelLength} characters of lower-case letters, digits and underscores, starting with a letter.");
 

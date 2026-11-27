@@ -39,4 +39,23 @@ public sealed class ValidationException : BsftException
     {
         Errors = errors ?? throw new ArgumentNullException(nameof(errors));
     }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ValidationException"/> class with a custom message,
+    /// errors and a caller-supplied error code.
+    /// </summary>
+    /// <param name="message">The error message.</param>
+    /// <param name="errors">The validation errors keyed by field name.</param>
+    /// <param name="errorCode">
+    /// The machine-readable discriminator the client branches on. Two 400s that a human tells apart by
+    /// their message are told apart in code by this, the same way <see cref="ConflictException"/> lets a
+    /// family with more than one conflict of its own name each one.
+    /// </param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="errorCode"/> is blank.</exception>
+    public ValidationException(string message, IReadOnlyDictionary<string, string[]> errors, string errorCode)
+        : base(message, errorCode)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(errorCode);
+        Errors = errors ?? throw new ArgumentNullException(nameof(errors));
+    }
 }

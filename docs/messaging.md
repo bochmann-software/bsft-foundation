@@ -238,6 +238,11 @@ query runs on — without it the dispatcher table-scans on every poll.
 `InboxMessageEntityConfiguration` adds the unique index `(Consumer, EventId)`,
 which is what settles a race the read before a delivery cannot.
 
+Under `modelBuilder.UseTenantKeys()`, called before the two configurations, both tables carry a required `TenantId`
+that leads their key `(TenantId, Id)` and their indexes, and the `Id` is made by the client instead of an identity
+column. A row takes the tenant of the scope that writes it, a dispatcher or sweeper pass for one tenant touches only
+that tenant's rows, and the inbox store refuses a delivery without a tenant. See [data.md](data.md#tenant-keys).
+
 ## Publishing
 
 Staging happens through the scoped collector, in the same unit of work as the
@@ -1286,6 +1291,16 @@ The channel name is the one value that reaches the server as an identifier rathe
 — `LISTEN` takes no parameter — so it is validated at start-up against a narrow grammar: lower-case
 letters, digits and underscores, starting with a letter, at most 63 characters. Every writer and
 every listener of one database has to name the same channel.
+
+A host whose tenants live in databases of their own (silo mode) sets
+`BsftMessagingPostgresOptions.IsInProcessWake = true`. A `LISTEN` session hears one database, so a listener on
+one connection would wake the dispatcher for one tenant only; with the option on, a save that wrote outbox rows
+signals the dispatcher of its own process directly, no listening connection is opened, and the dispatcher's
+`ProcessOnceAsync` drains every tenant the `IBackgroundTenantSource` lists. Rows another instance committed are
+found by the poll, which stays on. A save inside a transaction that commits later may wake the drain before its
+rows are visible; those rows then wait for the next wake-up or the poll. A host that registers an
+`IBackgroundTenantSource` but leaves the option off gets a start-up warning, because its listener hears one
+database only.
 
 ### Bsft.Messaging.RabbitMQ
 

@@ -22,4 +22,21 @@ public sealed record JobExecutionContext(
     DateTimeOffset StartedAt,
     int AttemptNumber,
     string? CorrelationId,
-    string? Payload);
+    string? Payload)
+{
+    /// <summary>
+    /// The recorder of a context the scheduler did not create. Stateless, so one instance serves every
+    /// such context instead of one allocation per execution that the executor replaces at once.
+    /// </summary>
+    private static readonly IJobRunResultRecorder DetachedRecorder = new DetachedJobRunResultRecorder();
+
+    /// <summary>
+    /// Gets where the job records what it reports about this run, such as how many items it processed
+    /// and how many failed. The run listing returns the recorded result with the run.
+    /// </summary>
+    /// <remarks>
+    /// The scheduler always sets it. A context built by hand, as in a test, carries a recorder that
+    /// refuses to record, so a test that exercises a result supplies a recorder of its own.
+    /// </remarks>
+    public IJobRunResultRecorder ResultRecorder { get; init; } = DetachedRecorder;
+}

@@ -1,4 +1,5 @@
 using Bsft.Hosting.Cors;
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -62,40 +63,67 @@ public static class CorsServiceCollectionExtensions
             configure?.Invoke(target);
         }
 
+        // The policy, the built-in evaluator and UseBsftCors share this call's own options, as the policy
+        // always was built from them. The shared IOptions<BsftCorsOptions> below is registered as it always
+        // was: bound and configured at resolution, accumulating over repeated calls.
         var options = new BsftCorsOptions();
         Apply(options);
+        var registration = new BsftCorsRegistration(options);
+        services.Replace(ServiceDescriptor.Singleton(registration));
 
         services.AddOptions<BsftCorsOptions>().Configure(Apply).ValidateOnStart();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<BsftCorsOptions>, BsftCorsOptionsValidator>());
 
-        services.AddCors(corsOptions =>
-        {
-            corsOptions.AddPolicy(HostingDefaults.CorsPolicyName, builder =>
-            {
-                if (options.IsAnyOriginAllowed)
-                {
-                    builder.AllowAnyOrigin()
-                           .AllowAnyMethod()
-                           .AllowAnyHeader();
-                    return;
-                }
-
-                if (options.Origins.Count > 0)
-                {
-                    builder.WithOrigins([.. options.Origins]);
-                }
-
-                builder.AllowAnyMethod()
-                       .AllowAnyHeader();
-
-                if (options.AreCredentialsAllowed)
-                {
-                    builder.AllowCredentials();
-                }
-            });
-        });
+        services.AddCors();
+        services.TryAddSingleton<IBsftCorsOriginEvaluator, BsftCorsOriginEvaluator>();
+        services.AddOptions<CorsOptions>().Configure<IBsftCorsOriginEvaluator>(
+            (corsOptions, registered) => corsOptions.AddPolicy(options.PolicyName, builder =>
+                ConfigurePolicy(builder, registration, registered)));
 
         return services;
+    }
+
+    private static void ConfigurePolicy(
+        CorsPolicyBuilder builder, BsftCorsRegistration registration, IBsftCorsOriginEvaluator registered)
+    {
+        var options = registration.Options;
+        if (options.ExposedHeaders.Count > 0)
+        {
+            builder.WithExposedHeaders([.. options.ExposedHeaders]);
+        }
+
+        if (options.IsAnyOriginAllowed)
+        {
+            builder.AllowAnyOrigin()
+                   .AllowAnyMethod()
+                   .AllowAnyHeader();
+            return;
+        }
+
+        if (options.Origins.Count > 0)
+        {
+            builder.WithOrigins([.. options.Origins]);
+        }
+
+        // ASP.NET Core adds Vary: Origin as soon as the origin decision is not its own default, so the
+        // evaluator is installed only when it can decide differently: a predicate, or a host evaluator.
+        if (options.OriginPredicate is not null || registered is not BsftCorsOriginEvaluator)
+        {
+            // A host evaluator is shared by every policy; the built-in decision is this call's own, so a
+            // policy registered by an earlier call under another name stays consistent with its options.
+            var decision = registered is BsftCorsOriginEvaluator
+                ? new BsftCorsOriginEvaluator(registration)
+                : registered;
+            builder.SetIsOriginAllowed(decision.IsOriginAllowed);
+        }
+
+        builder.AllowAnyMethod()
+               .AllowAnyHeader();
+
+        if (options.AreCredentialsAllowed)
+        {
+            builder.AllowCredentials();
+        }
     }
 }

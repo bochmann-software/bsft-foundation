@@ -28,10 +28,11 @@ public sealed class DefaultMediator : IMediator
         var commandType = command.GetType();
         var handlerType = HandlerInvokers.Close(typeof(ICommandHandler<,>), commandType, typeof(TResult));
 
-        var invoke = ResolveInvoker<TResult>(handlerType, command, cancellationToken)
+        Func<Task<TResult>> ResolveHandler(IServiceProvider provider) =>
+            ResolveInvoker<TResult>(provider, handlerType, command, cancellationToken)
             ?? throw MissingHandler("command", commandType);
 
-        return ExecuteWithPipelineAsync(command, invoke, cancellationToken);
+        return ExecuteWithPipelineAsync(command, ResolveHandler(_serviceProvider), ResolveHandler, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -43,11 +44,13 @@ public sealed class DefaultMediator : IMediator
 
         // A command without a result may be handled either by ICommandHandler<TCommand> or by
         // ICommandHandler<TCommand, Unit>; the pipeline sees the Unit shape in both cases.
-        var invoke = ResolveVoidInvoker(commandType, command, cancellationToken)
-            ?? ResolveInvoker<Unit>(HandlerInvokers.Close(typeof(ICommandHandler<,>), commandType, typeof(Unit)), command, cancellationToken)
+        Func<Task<Unit>> ResolveHandler(IServiceProvider provider) =>
+            ResolveVoidInvoker(provider, commandType, command, cancellationToken)
+            ?? ResolveInvoker<Unit>(provider, HandlerInvokers.Close(typeof(ICommandHandler<,>), commandType, typeof(Unit)), command, cancellationToken)
             ?? throw MissingHandler("command", commandType);
 
-        await ExecuteWithPipelineAsync<ICommand<Unit>, Unit>(command, invoke, cancellationToken).ConfigureAwait(false);
+        await ExecuteWithPipelineAsync<ICommand<Unit>, Unit>(command, ResolveHandler(_serviceProvider), ResolveHandler, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -58,10 +61,11 @@ public sealed class DefaultMediator : IMediator
         var queryType = query.GetType();
         var handlerType = HandlerInvokers.Close(typeof(IQueryHandler<,>), queryType, typeof(TResult));
 
-        var invoke = ResolveInvoker<TResult>(handlerType, query, cancellationToken)
+        Func<Task<TResult>> ResolveHandler(IServiceProvider provider) =>
+            ResolveInvoker<TResult>(provider, handlerType, query, cancellationToken)
             ?? throw MissingHandler("query", queryType);
 
-        return ExecuteWithPipelineAsync(query, invoke, cancellationToken);
+        return ExecuteWithPipelineAsync(query, ResolveHandler(_serviceProvider), ResolveHandler, cancellationToken);
     }
 
     /// <summary>Reports that nothing is registered to handle a request.</summary>
@@ -73,13 +77,15 @@ public sealed class DefaultMediator : IMediator
 
     /// <summary>Resolves the handler for a request and returns the call that runs it.</summary>
     /// <typeparam name="TResult">The result the handler returns.</typeparam>
+    /// <param name="provider">The provider of the scope the request runs in.</param>
     /// <param name="handlerType">The closed handler interface to resolve.</param>
     /// <param name="request">The request to hand the handler.</param>
     /// <param name="cancellationToken">The cancellation token to hand the handler.</param>
     /// <returns>The call, or <see langword="null"/> when nothing is registered for that interface.</returns>
-    private Func<Task<TResult>>? ResolveInvoker<TResult>(Type handlerType, object request, CancellationToken cancellationToken)
+    private static Func<Task<TResult>>? ResolveInvoker<TResult>(
+        IServiceProvider provider, Type handlerType, object request, CancellationToken cancellationToken)
     {
-        var handler = _serviceProvider.GetService(handlerType);
+        var handler = provider.GetService(handlerType);
 
         if (handler is null)
             return null;
@@ -90,14 +96,16 @@ public sealed class DefaultMediator : IMediator
     }
 
     /// <summary>Resolves a handler that returns no result and reports its completion as a unit.</summary>
+    /// <param name="provider">The provider of the scope the command runs in.</param>
     /// <param name="commandType">The command's runtime type.</param>
     /// <param name="command">The command to hand the handler.</param>
     /// <param name="cancellationToken">The cancellation token to hand the handler.</param>
     /// <returns>The call, or <see langword="null"/> when no such handler is registered.</returns>
-    private Func<Task<Unit>>? ResolveVoidInvoker(Type commandType, object command, CancellationToken cancellationToken)
+    private static Func<Task<Unit>>? ResolveVoidInvoker(
+        IServiceProvider provider, Type commandType, object command, CancellationToken cancellationToken)
     {
         var handlerType = HandlerInvokers.Close(typeof(ICommandHandler<>), commandType);
-        var handler = _serviceProvider.GetService(handlerType);
+        var handler = provider.GetService(handlerType);
 
         if (handler is null)
             return null;
@@ -256,9 +264,29 @@ public sealed class DefaultMediator : IMediator
     private Task<TResponse> ExecuteWithPipelineAsync<TRequest, TResponse>(
         TRequest request,
         Func<Task<TResponse>> handler,
-        CancellationToken cancellationToken = default)
+        Func<IServiceProvider, Func<Task<TResponse>>> resolveHandler,
+        CancellationToken cancellationToken = default) =>
+        BuildPipeline(_serviceProvider, request, handler, resolveHandler, 0, cancellationToken)();
+
+    /// <summary>
+    /// Folds the behaviors of one scope, from <paramref name="start"/> on, around the handler.
+    /// </summary>
+    /// <param name="provider">The provider of the scope the behaviors are resolved from.</param>
+    /// <param name="request">The request.</param>
+    /// <param name="handler">The call that runs the handler resolved from the same scope.</param>
+    /// <param name="resolveHandler">Resolves the handler from another scope, for a rescoping behavior.</param>
+    /// <param name="start">The position of the first behavior to run.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The call that runs the pipeline.</returns>
+    private static Func<Task<TResponse>> BuildPipeline<TRequest, TResponse>(
+        IServiceProvider provider,
+        TRequest request,
+        Func<Task<TResponse>> handler,
+        Func<IServiceProvider, Func<Task<TResponse>>> resolveHandler,
+        int start,
+        CancellationToken cancellationToken)
     {
-        var resolved = _serviceProvider
+        var resolved = provider
             .GetServices<IPipelineBehavior<TRequest, TResponse>>()
             .ToList();
 
@@ -267,19 +295,87 @@ public sealed class DefaultMediator : IMediator
         // AddBsftMediator, so registration order is not something the defaults can control. The
         // orderer exists only when the host asked for the defaults; without it registration order
         // stands, which is the escape hatch for a host wiring its own chain.
-        var orderer = _serviceProvider.GetService<IPipelineBehaviorOrderer>();
+        var orderer = provider.GetService<IPipelineBehaviorOrderer>();
         var behaviors = orderer is null ? resolved : orderer.Order(resolved);
 
         var next = handler;
 
         // Folded from the inside out, so the first behavior of the ordered list is entered first.
-        for (var position = behaviors.Count - 1; position >= 0; position--)
+        for (var position = behaviors.Count - 1; position >= start; position--)
         {
             var behavior = behaviors[position];
             var currentNext = next;
-            next = () => behavior.HandleAsync(request, currentNext, cancellationToken);
+
+            if (behavior is IRescopingPipelineBehavior<TRequest, TResponse> rescoping)
+            {
+                var continuation = CreateContinuation(provider, request, currentNext, resolveHandler, position + 1, cancellationToken);
+                next = () => rescoping.HandleAsync(request, continuation, cancellationToken);
+            }
+            else
+            {
+                next = () => behavior.HandleAsync(request, currentNext, cancellationToken);
+            }
         }
 
-        return next();
+        return next;
     }
+
+    /// <summary>
+    /// Hands a rescoping behavior the rest of the pipeline: in its own scope, or rebuilt from
+    /// <paramref name="rest"/> on in a fresh one.
+    /// </summary>
+    /// <param name="provider">The provider of the scope the behavior was resolved from.</param>
+    /// <param name="request">The request.</param>
+    /// <param name="currentNext">The rest of the pipeline in that scope.</param>
+    /// <param name="resolveHandler">Resolves the handler from another scope.</param>
+    /// <param name="rest">The position of the behavior after the rescoping one.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The continuation the behavior runs the rest of the pipeline through.</returns>
+    /// <remarks>
+    /// The same registrations order the same way in every scope, so the rest of a fresh scope's
+    /// pipeline starts at the same position as the rest of this one.
+    /// </remarks>
+    private static PipelineContinuation<TResponse> CreateContinuation<TRequest, TResponse>(
+        IServiceProvider provider,
+        TRequest request,
+        Func<Task<TResponse>> currentNext,
+        Func<IServiceProvider, Func<Task<TResponse>>> resolveHandler,
+        int rest,
+        CancellationToken cancellationToken) =>
+        new(
+            attempt => attempt(provider, currentNext),
+            attempt => RunInNewScopeAsync(
+                provider,
+                scope => BuildPipeline(scope, request, resolveHandler(scope), resolveHandler, rest, cancellationToken),
+                attempt));
+    /// <summary>
+    /// Runs an attempt of a rescoping behavior in a fresh scope: seeded from the request's scope, with
+    /// the rest of the pipeline rebuilt in it, and disposed once the attempt completed.
+    /// </summary>
+    /// <param name="requestScope">The provider of the request's own scope, the seeds are resolved from.</param>
+    /// <param name="buildRest">Builds the rest of the pipeline in the fresh scope.</param>
+    /// <param name="attempt">The behavior's attempt.</param>
+    /// <returns>What the attempt returns.</returns>
+    private static async Task<TResponse> RunInNewScopeAsync<TResponse>(
+        IServiceProvider requestScope,
+        Func<IServiceProvider, Func<Task<TResponse>>> buildRest,
+        PipelineAttempt<TResponse> attempt)
+    {
+        var scope = requestScope.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
+
+        try
+        {
+            // Before anything is resolved from the fresh scope, so a connection factory that reads
+            // the tenant sees the seeded one.
+            foreach (var seed in requestScope.GetServices<IRequestScopeSeed>())
+                seed.Seed(scope.ServiceProvider);
+
+            return await attempt(scope.ServiceProvider, buildRest(scope.ServiceProvider)).ConfigureAwait(false);
+        }
+        finally
+        {
+            await scope.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
 }

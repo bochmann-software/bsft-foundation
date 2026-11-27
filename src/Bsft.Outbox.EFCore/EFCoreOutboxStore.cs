@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Bsft.Core.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -26,6 +27,7 @@ public sealed class EFCoreOutboxStore<TEntity, TPayload> : IOutboxStore<TPayload
     where TEntity : OutboxRow
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ITenantScopeFactory? _tenantScopes;
     private readonly IOutboxRowSource<TEntity, TPayload> _rows;
 
     /// <summary>
@@ -40,12 +42,29 @@ public sealed class EFCoreOutboxStore<TEntity, TPayload> : IOutboxStore<TPayload
         _rows = rows ?? throw new ArgumentNullException(nameof(rows));
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="EFCoreOutboxStore{TEntity, TPayload}"/> class that opens the scope
+    /// of an operation through <paramref name="tenantScopes"/>, with <see cref="ITenantScopeFactory.CreateScopeAsync"/>,
+    /// while a background pass works for a tenant (<see cref="BackgroundTenant.Current"/>), so that a host whose tenant
+    /// scope binds with I/O gets the tenant's binding in the drain's operations.
+    /// </summary>
+    /// <param name="scopeFactory">The service scope factory used outside a tenant's pass.</param>
+    /// <param name="rows">Where this outbox's rows live and how one is read.</param>
+    /// <param name="tenantScopes">Opens the scope of an operation inside a tenant's pass.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    public EFCoreOutboxStore(
+        IServiceScopeFactory scopeFactory, IOutboxRowSource<TEntity, TPayload> rows, ITenantScopeFactory tenantScopes)
+        : this(scopeFactory, rows)
+    {
+        _tenantScopes = tenantScopes ?? throw new ArgumentNullException(nameof(tenantScopes));
+    }
+
     /// <inheritdoc />
     public async Task<IReadOnlyList<LeasedOutboxRow<TPayload>>> LeaseAsync(
         DateTimeOffset now, TimeSpan leaseDuration, int batchSize, CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var set = _rows.Rows(scope.ServiceProvider);
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
+        var set = InScope(_rows.Rows(scope.ServiceProvider), scope.ServiceProvider);
 
         var nowUtc = now.UtcDateTime;
         var leasedUntil = now.Add(leaseDuration).UtcDateTime;
@@ -76,7 +95,7 @@ public sealed class EFCoreOutboxStore<TEntity, TPayload> : IOutboxStore<TPayload
             // failed often enough to be retired. Claiming on a count read before that increment would
             // hand out a stale one and buy the row extra attempts, so the claim is dropped instead and
             // the next pass reads the row afresh.
-            var affected = await set
+            var affected = await WithOwnerOf(set, candidate)
                 .Where(Claimable(nowUtc))
                 .Where(e => e.Id == candidate.Id
                     && e.LeaseToken == candidate.LeaseToken
@@ -119,8 +138,8 @@ public sealed class EFCoreOutboxStore<TEntity, TPayload> : IOutboxStore<TPayload
     public async Task<bool> TryMarkProcessedAsync(
         long id, Guid leaseToken, DateTimeOffset processedAt, CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var set = _rows.Rows(scope.ServiceProvider);
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
+        var set = InScope(_rows.Rows(scope.ServiceProvider), scope.ServiceProvider);
 
         var processedAtUtc = processedAt.UtcDateTime;
 
@@ -140,8 +159,8 @@ public sealed class EFCoreOutboxStore<TEntity, TPayload> : IOutboxStore<TPayload
     public async Task AbandonAsync(
         long id, Guid leaseToken, DateTimeOffset nextAttemptAt, CancellationToken cancellationToken = default)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var set = _rows.Rows(scope.ServiceProvider);
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
+        var set = InScope(_rows.Rows(scope.ServiceProvider), scope.ServiceProvider);
 
         var nextAttemptAtUtc = nextAttemptAt.UtcDateTime;
 
@@ -167,8 +186,8 @@ public sealed class EFCoreOutboxStore<TEntity, TPayload> : IOutboxStore<TPayload
         if (reason is null)
             throw new ArgumentNullException(nameof(reason));
 
-        using var scope = _scopeFactory.CreateScope();
-        var set = _rows.Rows(scope.ServiceProvider);
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
+        var set = InScope(_rows.Rows(scope.ServiceProvider), scope.ServiceProvider);
 
         var deadLetteredAtUtc = deadLetteredAt.UtcDateTime;
 
@@ -187,6 +206,20 @@ public sealed class EFCoreOutboxStore<TEntity, TPayload> : IOutboxStore<TPayload
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>Narrows a scope's set to the rows it may touch, when the source asks for it.</summary>
+    /// <param name="set">The set.</param>
+    /// <param name="scopedServices">The scope the set was resolved from.</param>
+    /// <returns>The narrowed query, or the whole set.</returns>
+    private IQueryable<TEntity> InScope(IQueryable<TEntity> set, IServiceProvider scopedServices) =>
+        _rows is IOutboxRowScope<TEntity> scoped ? scoped.InScope(set, scopedServices) : set;
+
+    /// <summary>Restricts a claim to the owner of the row it claims, when the source asks for it.</summary>
+    /// <param name="set">The scope's rows.</param>
+    /// <param name="candidate">The row as the poll read it.</param>
+    /// <returns>The restricted query, or the rows unchanged.</returns>
+    private IQueryable<TEntity> WithOwnerOf(IQueryable<TEntity> set, TEntity candidate) =>
+        _rows is IOutboxRowScope<TEntity> scoped ? scoped.WithOwnerOf(set, candidate) : set;
 
     /// <summary>
     /// Cuts the recorded failure to the column width without splitting a surrogate pair. A cut through

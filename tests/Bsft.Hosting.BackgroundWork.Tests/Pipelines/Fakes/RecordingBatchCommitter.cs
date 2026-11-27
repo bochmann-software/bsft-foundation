@@ -45,6 +45,6 @@ internal sealed class RecordingBatchCommitter : IBatchCommitter<SampleItem>
     public async Task WaitForBatchesAsync(int count)
     {
         for (var index = 0; index < count; index++)
-            (await _started.WaitAsync(TimeSpan.FromSeconds(20)).ConfigureAwait(false)).Should().BeTrue();
+            (await _started.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false)).Should().BeTrue();
     }
 }

@@ -46,7 +46,7 @@ public class JobRunnerTests
     {
         var scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
 
-        return CreateRunner(new JobExecutor(scopeFactory, _time, Options.Create(_options), _telemetry), definitions);
+        return CreateRunner(new JobExecutor(scopeFactory, _time, Options.Create(_options), _telemetry, new JobRunResultRecorderFactory(Options.Create(_options))), definitions);
     }
 
     private JobRunner CreateRunner(IJobExecutor executor, params JobDefinition[] definitions)
@@ -316,7 +316,7 @@ public class JobRunnerTests
     {
         var registry = new JobRegistry([OneShot()], _jobOptions);
         var scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
-        var executor = new JobExecutor(scopeFactory, _time, Options.Create(_options), _telemetry);
+        var executor = new JobExecutor(scopeFactory, _time, Options.Create(_options), _telemetry, new JobRunResultRecorderFactory(Options.Create(_options)));
         var planner = new RecurringJobPlanner(
             _store, registry, new JobScheduleResolver(registry, scopeFactory), _time, NullLogger<RecurringJobPlanner>.Instance);
         var outcomes = new JobRunOutcomePolicy(

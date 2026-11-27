@@ -9,9 +9,10 @@ namespace Bsft.Hosting.BackgroundWork.Tests;
 /// that is a contract rather than a coincidence.
 /// </summary>
 /// <remarks>
-/// <c>Bsft.Hosting</c> pulls in ASP.NET Core, Swashbuckle, API versioning and the OpenAPI stack for the
-/// web host it configures. None of that may reach this package's closure again, whichever dependency is
-/// added next, so both halves are pinned: what the assembly references, and what a restore resolved.
+/// <c>Bsft.Hosting</c> pulls in ASP.NET Core for the web host it configures, and <c>Bsft.Hosting.OpenApi</c>
+/// adds Swashbuckle, API versioning and the OpenAPI stack on top. None of that may reach this package's
+/// closure again, whichever dependency is added next, so both halves are pinned: what the assembly
+/// references, and what a restore resolved.
 /// </remarks>
 public sealed class DependencyClosureTests
 {
@@ -53,9 +54,9 @@ public sealed class DependencyClosureTests
             .And.OnlyContain(name => name == "Microsoft.NETCore.App");
 
     [Fact]
-    public void RestoredGraph_TakesOnlyTheFoundationInstrumentationPackageFromBsft() =>
+    public void RestoredGraph_TakesOnlyFoundationPackagesWithoutAWebStackFromBsft() =>
         DependencyClosure.DependencyNames(DependencyClosure.RestoredGraph("Bsft.Hosting.BackgroundWork"))
             .Where(name => name.StartsWith("Bsft.", StringComparison.Ordinal))
             .Should()
-            .BeEquivalentTo(["Bsft.Instrumentation"]);
+            .BeEquivalentTo(["Bsft.Core", "Bsft.Hosting.StartGates", "Bsft.Instrumentation"]);
 }

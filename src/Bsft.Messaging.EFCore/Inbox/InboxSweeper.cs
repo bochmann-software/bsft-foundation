@@ -1,4 +1,6 @@
 using Bsft.Core.Polling;
+using Bsft.Core.Tenancy;
+using Bsft.Data.MultiTenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -45,6 +47,8 @@ public sealed class InboxSweeper : BackgroundService, IPollReporter
     /// </summary>
     private static readonly TimeSpan MaxSweepInterval = TimeSpan.FromHours(1);
 
+    private readonly IBackgroundTenantSource? _tenants;
+    private readonly ITenantScopeFactory? _tenantScopes;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ConsumerOptions _options;
     private readonly TimeProvider _timeProvider;
@@ -82,6 +86,55 @@ public sealed class InboxSweeper : BackgroundService, IPollReporter
                 nameof(options), retention, "The inbox retention must be positive when it is set.");
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="InboxSweeper"/> class that runs each pass once per tenant
+    /// of <paramref name="tenants"/>, with <see cref="BackgroundTenant.Current"/> set, so that every scope a pass opens
+    /// resolves that tenant. The container picks this constructor when an <see cref="IBackgroundTenantSource"/> is
+    /// registered.
+    /// </summary>
+    /// <param name="scopeFactory">As for the constructor without the tenant source.</param>
+    /// <param name="options">As for the constructor without the tenant source.</param>
+    /// <param name="timeProvider">As for the constructor without the tenant source.</param>
+    /// <param name="logger">As for the constructor without the tenant source.</param>
+    /// <param name="tenants">The tenants the passes run for.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    public InboxSweeper(
+        IServiceScopeFactory scopeFactory,
+        IOptions<BsftMessagingOptions> options,
+        TimeProvider timeProvider,
+        ILogger<InboxSweeper> logger,
+        IBackgroundTenantSource tenants)
+        : this(scopeFactory, options, timeProvider, logger)
+    {
+        _tenants = tenants ?? throw new ArgumentNullException(nameof(tenants));
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="InboxSweeper"/> class that runs each pass once per tenant
+    /// of <paramref name="tenants"/> and opens the scope of a tenant's pass through <paramref name="tenantScopes"/>,
+    /// with <see cref="ITenantScopeFactory.CreateScopeAsync"/>, so that a host whose tenant scope binds with I/O is
+    /// never called synchronously. The container picks this constructor when an <see cref="IBackgroundTenantSource"/>
+    /// and an <see cref="ITenantScopeFactory"/> are registered.
+    /// </summary>
+    /// <param name="scopeFactory">As for the constructor without the tenant source.</param>
+    /// <param name="options">As for the constructor without the tenant source.</param>
+    /// <param name="timeProvider">As for the constructor without the tenant source.</param>
+    /// <param name="logger">As for the constructor without the tenant source.</param>
+    /// <param name="tenants">The tenants the passes run for.</param>
+    /// <param name="tenantScopes">Opens the scope of a tenant's pass.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    public InboxSweeper(
+        IServiceScopeFactory scopeFactory,
+        IOptions<BsftMessagingOptions> options,
+        TimeProvider timeProvider,
+        ILogger<InboxSweeper> logger,
+        IBackgroundTenantSource tenants,
+        ITenantScopeFactory tenantScopes)
+        : this(scopeFactory, options, timeProvider, logger, tenants)
+    {
+        _tenantScopes = tenantScopes ?? throw new ArgumentNullException(nameof(tenantScopes));
+    }
+
     /// <inheritdoc />
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => RunLoopAsync(stoppingToken);
 
@@ -105,7 +158,7 @@ public sealed class InboxSweeper : BackgroundService, IPollReporter
         // configure, and the cap keeps a long one from becoming a rare, enormous delete.
         var interval = retention < MaxSweepInterval ? retention : MaxSweepInterval;
 
-        await new PollLoop(ct => SweepAsync(retention, ct), this, interval)
+        await new PollLoop(BackgroundTenantPasses.PerTenant(_tenants, ct => SweepAsync(retention, ct)), this, interval, _timeProvider)
             .RunAsync(stoppingToken)
             .ConfigureAwait(false);
     }
@@ -141,7 +194,7 @@ public sealed class InboxSweeper : BackgroundService, IPollReporter
         var cutoff = (_timeProvider.GetUtcNow() - retention).UtcDateTime;
         var consumer = _options.ConsumerName;
 
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = await TenantPassScope.CreateAsync(_scopeFactory, _tenantScopes, cancellationToken).ConfigureAwait(false);
         var db = scope.ServiceProvider.GetRequiredService<IInboxDbContext>();
 
         // One set-based statement rather than loading the rows: nothing here reads a record, and
@@ -150,8 +203,13 @@ public sealed class InboxSweeper : BackgroundService, IPollReporter
         // index the table already carries; deliberately no index of its own on the age, because a sweep
         // runs at most hourly against a table this same sweep keeps small, and a second index would be
         // paid for on every delivery instead.
-        var pruned = await db.InboxMessages
-            .Where(e => e.Consumer == consumer && e.ReceivedAt < cutoff)
+        // Under tenant keys a pass inside a BackgroundTenant sweeps that tenant only.
+        var expired = db.InboxMessages.Where(e => e.Consumer == consumer && e.ReceivedAt < cutoff);
+
+        if (db.InboxMessages.IsTenantKeyed() && scope.ServiceProvider.FindCurrentTenantId() is { } tenantId)
+            expired = expired.Where(e => e.TenantId == tenantId);
+
+        var pruned = await expired
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
 

@@ -1,4 +1,5 @@
 using Bsft.Core.Polling;
+using Bsft.Core.Tenancy;
 using Bsft.Scheduling.Diagnostics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -24,6 +25,7 @@ namespace Bsft.Scheduling.Execution;
 /// </remarks>
 public sealed class JobDispatcher : BackgroundService, IPollReporter
 {
+    private readonly IBackgroundTenantSource? _tenants;
     private readonly IJobStore _store;
     private readonly IJobRunner _runner;
     private readonly TimeProvider _timeProvider;
@@ -60,6 +62,33 @@ public sealed class JobDispatcher : BackgroundService, IPollReporter
         _options = options.Value;
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="JobDispatcher"/> class that runs each pass once per tenant
+    /// of <paramref name="tenants"/>, with <see cref="BackgroundTenant.Current"/> set, so that every scope a pass opens
+    /// resolves that tenant. The container picks this constructor when an <see cref="IBackgroundTenantSource"/> is
+    /// registered.
+    /// </summary>
+    /// <param name="store">As for the constructor without the tenant source.</param>
+    /// <param name="runner">As for the constructor without the tenant source.</param>
+    /// <param name="timeProvider">As for the constructor without the tenant source.</param>
+    /// <param name="options">As for the constructor without the tenant source.</param>
+    /// <param name="telemetry">As for the constructor without the tenant source.</param>
+    /// <param name="logger">As for the constructor without the tenant source.</param>
+    /// <param name="tenants">The tenants the passes run for.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    public JobDispatcher(
+        IJobStore store,
+        IJobRunner runner,
+        TimeProvider timeProvider,
+        IOptions<BsftSchedulingOptions> options,
+        IJobTelemetry telemetry,
+        ILogger<JobDispatcher> logger,
+        IBackgroundTenantSource tenants)
+        : this(store, runner, timeProvider, options, telemetry, logger)
+    {
+        _tenants = tenants ?? throw new ArgumentNullException(nameof(tenants));
+    }
+
     /// <inheritdoc />
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => RunLoopAsync(stoppingToken);
 
@@ -73,7 +102,7 @@ public sealed class JobDispatcher : BackgroundService, IPollReporter
     /// <param name="stoppingToken">The token that stops the loop when cancelled.</param>
     /// <returns>A task that completes when the loop has unwound.</returns>
     internal Task RunLoopAsync(CancellationToken stoppingToken = default) =>
-        new PollLoop(DispatchAsync, this, _options.PollInterval).RunAsync(stoppingToken);
+        new PollLoop(BackgroundTenantPasses.PerTenant(_tenants, DispatchAsync), this, _options.PollInterval, _timeProvider).RunAsync(stoppingToken);
 
     /// <summary>
     /// One pass of the loop. A pass that claimed something probably has more waiting, so it polls

@@ -62,6 +62,11 @@ public async Task<ActionResult<CreatedResponse>> Create(CreateProductRequest req
 var group = app.MapGroup("/api/payments").RequireIdempotencyKey();   // and refuse a call without a key
 ```
 
+A tenant database whose tables all carry a non-null `TenantId` calls `modelBuilder.UseTenantKeys()` before applying
+`IdempotencyRecordEntityConfiguration`: the table is then keyed `(TenantId, Id)` with a client-made `Id`, unique on
+`(TenantId, Scope, Key)`, and the store reads and writes only the scope's tenant, refusing a request without one. See
+[data.md](data.md#tenant-keys).
+
 ## What a client sees
 
 | Situation | Result |
@@ -74,6 +79,7 @@ var group = app.MapGroup("/api/payments").RequireIdempotencyKey();   // and refu
 | Key malformed or too long | **400**, keyed on `idempotencyKey` |
 | Body over `MaxBodyBytes` | **413**, `errorCode` `IDEMPOTENCY_PAYLOAD_TOO_LARGE` |
 | Response over `MaxResponseBytes` | answered normally, but not stored — the key runs again |
+| Repeat on a sensitive endpoint whose stored body cannot be decrypted | **409**, `errorCode` `IDEMPOTENCY_RESPONSE_WITHHELD`; the secret was issued, rotate it |
 
 The in-progress case is the one hand-rolled implementations get wrong. They either block — holding a
 connection and a database row for the duration of somebody else's request — or answer 200 with no
@@ -246,6 +252,70 @@ download, a server-sent-event stream: none of them should be marked `[Idempotent
 directions are held in memory for the length of the request. An upload's idempotency is its own
 problem and belongs to its own ticket.
 
+## Responses that carry a secret
+
+A replay needs the first response, so the record keeps it for the whole replay window: 24 hours by
+default, in plaintext. For an ordinary create that is the design. For a response that discloses a
+credential exactly once — a minted client secret, an API key, a recovery code — it is a second copy
+of the secret, in a table, outliving the moment it was meant to exist in.
+
+Such a route says so with `[SensitiveIdempotentResponse]` on a controller action, or
+`.WithSensitiveResponse()` on a minimal-API route or group, next to the idempotency opt-in it
+refines:
+
+```csharp
+group.MapPost("/clients", RegisterClientAsync)
+    .RequireIdempotencyKey()
+    .WithSensitiveResponse();
+```
+
+The body is then **encrypted at rest** with ASP.NET Core Data Protection (purpose
+`Bsft.Idempotency.ResponseBody.v1`) before it is stored, and decrypted when it is replayed; the status
+and the allowlisted headers are stored as before. A replay is byte-identical to the first response, as
+for every other route. Without the marker nothing changes.
+
+Two designs were possible: encrypt the stored body, or store none and answer every replay with a 409.
+Encryption was chosen because it keeps the one property a retrying client relies on — the retry gets
+the answer it missed — and because it is available within the package conventions: `Bsft.Idempotency`
+is a Foundation package and may not reference `Bsft.Security`'s secret protector, but Data Protection
+ships in the ASP.NET Core shared framework the package already references, so `AddBsftIdempotency` adds
+it (`AddDataProtection`, which leaves a key ring the host or `Bsft.Security` configured alone).
+
+The "not stored" answer is still there, as the failure mode rather than the design. When a stored body
+cannot be decrypted — replicas that do not share one key ring, a revoked key, a record written before
+the marker was added, a damaged row — the replay is refused with **409**
+`IDEMPOTENCY_RESPONSE_WITHHELD` and audited as `ResponseWithheld`: the first request ran and its secret
+was issued, so the client treats it as issued and rotates it rather than retrying. When the body cannot
+be encrypted at all (no usable key), the response is sent and nothing is stored, so the key runs again;
+plaintext is never written as a fallback. A sealed body carries a fixed marker, so removing the
+attribute from a route inside the replay window decrypts as before rather than replaying ciphertext.
+Each body is also bound to its record: it is sealed under the purpose chain
+`Bsft.Idempotency.ResponseBody.v1` → caller scope → idempotency key, so a ciphertext copied into another
+record does not decrypt there and is answered with the same 409.
+
+**The key ring is part of the protection.** Encryption at rest is only worth what the keys are worth,
+so a host that marks a route sensitive configures the Data Protection key ring for it:
+
+- **Persist it** (`PersistKeysToDbContext`, `PersistKeysToFileSystem`, `PersistKeysToAzureBlobStorage`,
+  …). The default ring of a container or of a host without a user profile lives in memory and is lost
+  on every restart.
+- **Protect it at rest** (`ProtectKeysWithCertificate`, `ProtectKeysWithAzureKeyVault`,
+  `ProtectKeysWithDpapi`, …). An unprotected ring is a plaintext key next to the ciphertext it opens.
+- **Store it apart from the idempotency store.** Keys in the same database, or the same backup, as the
+  idempotency records give anyone who can read the records the keys as well, and the encryption then
+  protects nothing. Put them in another database, another storage account or a key vault, under other
+  credentials.
+
+Losing the keys, by a restart with an unpersisted ring or by deleting the ring, makes every sealed body
+stored before it unreadable, and each replay of one answers **409** `IDEMPOTENCY_RESPONSE_WITHHELD`. That
+is by design, not a fault to work around: the secret was issued once, and the client rotates it.
+
+What this does not do: it does not stop the endpoint from minting a second secret on a retry that
+arrives after the record expired, and it does not protect a body a host's own store copies elsewhere.
+On more than one replica, share the Data Protection key ring (a host on `Bsft.Security` with
+`IsMultiInstance = true` already must declare one, or it does not start), or every replay on another
+replica answers the 409.
+
 ## The two modes, and what each buys
 
 The reservation and the endpoint's own transaction are not one atomic unit unless the host makes them
@@ -298,11 +368,11 @@ constructor argument to supply it through.
 
 ## Observing it
 
-`bsft.idempotency.replayed`, `.conflicted` and `.in_progress` are published on the `Bsft.Idempotency`
+`bsft.idempotency.replayed`, `.conflicted`, `.in_progress` and `.withheld` are published on the `Bsft.Idempotency`
 meter, which `AddBsftIdempotency` advertises through `Bsft.Instrumentation` so an observability
 backend collects it without referencing this package.
 
-The same three decisions go to `IIdempotencyAuditSink`, whose default discards them. A key-reuse
+The same decisions go to `IIdempotencyAuditSink`, whose default discards them. A key-reuse
 conflict is the one worth watching: it is either a client minting keys wrongly, or somebody probing
 another caller's keys. A request that simply ran is not reported — it is the ordinary case, and
 auditing it would double the write volume of every protected endpoint for no signal.

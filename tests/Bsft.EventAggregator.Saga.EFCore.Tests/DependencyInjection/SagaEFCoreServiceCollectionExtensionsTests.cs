@@ -2,6 +2,7 @@ using Bsft.EventAggregator.Saga.DependencyInjection;
 using Bsft.EventAggregator.Saga.EFCore.DependencyInjection;
 using Bsft.EventAggregator.Saga.EFCore.Tests.Support;
 using Bsft.EventAggregator.Saga.Timeouts;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,6 +31,33 @@ public class SagaEFCoreServiceCollectionExtensionsTests
 
         var store = provider.GetService<ISagaStore>();
         store.Should().NotBeNull().And.BeOfType<EFCoreSagaStore>();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AddBsftSagaEFCore_WhenTheHostRegisteredAClock_StampsTheStateWithIt(bool withTimeouts)
+    {
+        // The registered store takes the container's TimeProvider, so a host or a test that registers
+        // its own clock sees its instants on the saga rows rather than the machine's.
+        var now = new DateTimeOffset(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        var services = new ServiceCollection();
+        services.AddSingleton<TimeProvider>(new ManualTimeProvider(now));
+        services.AddDbContext<TestSagaDbContext>(opt => opt.UseInMemoryDatabase($"saga-ext-clock-{withTimeouts}"));
+        services.AddBsftSaga();
+        if (withTimeouts)
+            services.AddBsftSagaEFCoreWithTimeouts<TestSagaDbContext>();
+        else
+            services.AddBsftSagaEFCore<TestSagaDbContext>();
+
+        using var provider = services.BuildServiceProvider();
+        await provider.GetRequiredService<ISagaStore>()
+            .SaveAsync(new SagaInstance<TestSagaState>("OrderSaga", "order-1", new TestSagaState()));
+
+        using var scope = provider.CreateScope();
+        var row = await scope.ServiceProvider.GetRequiredService<TestSagaDbContext>().SagaStates.SingleAsync();
+        row.CreatedAt.Should().Be(now.UtcDateTime);
+        row.UpdatedAt.Should().Be(now.UtcDateTime);
     }
 
     [Fact]

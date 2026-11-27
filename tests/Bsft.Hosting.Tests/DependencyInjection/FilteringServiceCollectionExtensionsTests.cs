@@ -70,27 +70,6 @@ public class FilteringServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void BsftDefaultsConfiguration_FilterTransport_NullConfigure_Throws()
-    {
-        var config = new BsftDefaultsConfiguration();
-
-        var act = () => config.FilterTransport(null!);
-
-        act.Should().Throw<ArgumentNullException>().WithParameterName("configure");
-    }
-
-    [Fact]
-    public void BsftDefaultsConfiguration_FilterTransport_StoresConfigureAndChains()
-    {
-        var config = new BsftDefaultsConfiguration();
-
-        var returned = config.FilterTransport(o => o.MaxDepth = 5);
-
-        returned.Should().BeSameAs(config);
-    }
-
-
-    [Fact]
     public void AddBsftFilterTransport_WithConfiguration_BindsSection()
     {
         var configuration = new ConfigurationBuilder()

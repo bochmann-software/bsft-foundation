@@ -29,6 +29,7 @@ internal sealed class RabbitMQMessageBus : IMessageBus
     private readonly IRabbitMQMessageMapper _mapper;
     private readonly RabbitMQTopology _topology;
     private readonly RabbitMQConnectionSettings _settings;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<RabbitMQMessageBus> _logger;
 
     /// <summary>
@@ -38,6 +39,7 @@ internal sealed class RabbitMQMessageBus : IMessageBus
     /// <param name="mapper">The mapper turning the envelope into AMQP properties and a body.</param>
     /// <param name="topology">The resolved names, supplying the exchange to publish to.</param>
     /// <param name="settings">The settings, supplying the confirm timeout.</param>
+    /// <param name="timeProvider">The clock the confirm window runs on.</param>
     /// <param name="logger">The logger used to report publishes and their failures.</param>
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     public RabbitMQMessageBus(
@@ -45,12 +47,14 @@ internal sealed class RabbitMQMessageBus : IMessageBus
         IRabbitMQMessageMapper mapper,
         RabbitMQTopology topology,
         RabbitMQConnectionSettings settings,
+        TimeProvider timeProvider,
         ILogger<RabbitMQMessageBus> logger)
     {
         _channelProvider = channelProvider ?? throw new ArgumentNullException(nameof(channelProvider));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _topology = topology ?? throw new ArgumentNullException(nameof(topology));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -75,8 +79,8 @@ internal sealed class RabbitMQMessageBus : IMessageBus
         // Only the publish runs under the confirm window. Opening a connection above has timeouts of
         // its own, and folding it in here would report a broker that is merely slow to connect as a
         // confirmation that never came.
-        using var confirmWindow = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        confirmWindow.CancelAfter(_settings.PublisherConfirmTimeout);
+        using var confirmTimeout = new CancellationTokenSource(_settings.PublisherConfirmTimeout, _timeProvider);
+        using var confirmWindow = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, confirmTimeout.Token);
 
         try
         {

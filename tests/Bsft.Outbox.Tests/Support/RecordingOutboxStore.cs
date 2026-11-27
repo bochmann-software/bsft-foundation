@@ -21,6 +21,9 @@ public sealed class RecordingOutboxStore : IOutboxStore<string>
     /// <summary>The retirements, in order.</summary>
     public List<(long Id, string Reason)> DeadLettered { get; } = [];
 
+    /// <summary>Runs after each lease was handed out, so a test can act between the lease and the first row.</summary>
+    public Action? OnLease { get; set; }
+
     /// <summary>What each lease was asked for, in order.</summary>
     public List<(DateTimeOffset Now, TimeSpan LeaseDuration, int BatchSize)> Leases { get; } = [];
 
@@ -29,6 +32,7 @@ public sealed class RecordingOutboxStore : IOutboxStore<string>
         DateTimeOffset now, TimeSpan leaseDuration, int batchSize, CancellationToken ct = default)
     {
         Leases.Add((now, leaseDuration, batchSize));
+        OnLease?.Invoke();
 
         IReadOnlyList<LeasedOutboxRow<string>> claimed = Pending.Take(batchSize).ToList();
 

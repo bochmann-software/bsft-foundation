@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 
 namespace Bsft.Mediator;
 
@@ -12,16 +11,22 @@ namespace Bsft.Mediator;
 public sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
 {
     private readonly ILogger<LoggingBehavior<TRequest, TResponse>> _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly ICorrelationIdAccessor? _correlationIdAccessor;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LoggingBehavior{TRequest, TResponse}"/> class.
     /// </summary>
     /// <param name="logger">The logger instance.</param>
+    /// <param name="timeProvider">The clock the logged duration is measured on.</param>
     /// <param name="correlationIdAccessor">An optional accessor providing the current correlation ID.</param>
-    public LoggingBehavior(ILogger<LoggingBehavior<TRequest, TResponse>> logger, ICorrelationIdAccessor? correlationIdAccessor = null)
+    public LoggingBehavior(
+        ILogger<LoggingBehavior<TRequest, TResponse>> logger,
+        TimeProvider timeProvider,
+        ICorrelationIdAccessor? correlationIdAccessor = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _correlationIdAccessor = correlationIdAccessor;
     }
 
@@ -38,33 +43,36 @@ public sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRe
             correlationId,
             requestName);
 
-        var stopwatch = Stopwatch.StartNew();
+        var started = _timeProvider.GetTimestamp();
 
         try
         {
             var response = await next().ConfigureAwait(false);
-            stopwatch.Stop();
 
             _logger.LogInformation(
                 "[{CorrelationId}] Handled {RequestName} in {ElapsedMilliseconds}ms",
                 correlationId,
                 requestName,
-                stopwatch.ElapsedMilliseconds);
+                ElapsedMillisecondsSince(started));
 
             return response;
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
-
             _logger.LogError(
                 ex,
                 "[{CorrelationId}] Failed {RequestName} after {ElapsedMilliseconds}ms",
                 correlationId,
                 requestName,
-                stopwatch.ElapsedMilliseconds);
+                ElapsedMillisecondsSince(started));
 
             throw;
         }
     }
+
+    /// <summary>The whole milliseconds the clock has moved since <paramref name="started"/>.</summary>
+    /// <param name="started">A timestamp taken from the same clock.</param>
+    /// <returns>The elapsed time in whole milliseconds, as the log has always written it.</returns>
+    private long ElapsedMillisecondsSince(long started) =>
+        (long)_timeProvider.GetElapsedTime(started).TotalMilliseconds;
 }

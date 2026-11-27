@@ -14,6 +14,7 @@ namespace Bsft.Tests.Shared;
 internal sealed class RecordingLogger<TCategory> : ILogger<TCategory>
 {
     private readonly List<Entry> _entries = [];
+    private readonly List<(Func<Entry, bool> Matches, TaskCompletionSource Seen)> _watchers = [];
 
     /// <summary>The entries logged so far, in order, each carrying its level, message and any exception.</summary>
     internal IReadOnlyList<Entry> Entries
@@ -57,6 +58,23 @@ internal sealed class RecordingLogger<TCategory> : ILogger<TCategory>
         }
     }
 
+    /// <summary>Returns a task that completes once an entry matching the predicate has been logged.</summary>
+    /// <param name="matches">What the awaited entry looks like.</param>
+    /// <returns>A task that is already complete when a matching entry was logged before.</returns>
+    internal Task WrittenAsync(Func<Entry, bool> matches)
+    {
+        var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_entries)
+        {
+            if (_entries.Any(matches))
+                seen.TrySetResult();
+            else
+                _watchers.Add((matches, seen));
+        }
+
+        return seen.Task;
+    }
+
     /// <inheritdoc />
     public IDisposable BeginScope<TState>(TState state)
         where TState : notnull => NullScope.Instance;
@@ -75,15 +93,24 @@ internal sealed class RecordingLogger<TCategory> : ILogger<TCategory>
         if (formatter is null)
             throw new ArgumentNullException(nameof(formatter));
 
+        var entry = new Entry(logLevel, formatter(state, exception), exception) { EventId = eventId };
         lock (_entries)
-            _entries.Add(new Entry(logLevel, formatter(state, exception), exception));
+        {
+            _entries.Add(entry);
+            foreach (var watcher in _watchers.Where(watcher => watcher.Matches(entry)))
+                watcher.Seen.TrySetResult();
+        }
     }
 
     /// <summary>One line the logger kept.</summary>
     /// <param name="Level">The level it was logged at.</param>
     /// <param name="Message">The formatted message.</param>
     /// <param name="Exception">The exception it carried, if any.</param>
-    internal sealed record Entry(LogLevel Level, string Message, Exception? Exception);
+    internal sealed record Entry(LogLevel Level, string Message, Exception? Exception)
+    {
+        /// <summary>The event id the entry was logged with, so a test can pin it.</summary>
+        internal EventId EventId { get; init; }
+    }
 
     /// <summary>A scope that records nothing, because no test asserts on scopes.</summary>
     private sealed class NullScope : IDisposable

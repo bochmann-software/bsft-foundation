@@ -11,6 +11,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { readRepository, readSolution } from './model.mjs';
 import { runChecks, stronglyConnected, SMALL_PACKAGE_MAX_FILES } from './checks.mjs';
 import { readDeclarations, stripTrivia, stringLiterals } from './csharp.mjs';
@@ -395,6 +396,26 @@ test('name-duplicate: two public types of one name and arity in src; another ari
   assert.deepEqual(run(withFiles({ 'src/Bsft.Shop/Payments/OrderPlaced.cs': type('Bsft.Shop.Payments', 'internal sealed record OrderPlaced(int Id);') })), []);
 });
 
+test('name-duplicate: a moved type kept under its old name and hidden passes; unhidden it does not', () => {
+  const hidden = '[EditorBrowsable(EditorBrowsableState.Never)]\npublic sealed record OrderPlaced(int Id);';
+  assert.deepEqual(run(withFiles({ 'src/Bsft.Shop/Payments/OrderPlaced.cs': type('Bsft.Shop.Payments', hidden) })), []);
+  only(run(withFiles({ 'src/Bsft.Shop/Payments/OrderPlaced.cs': type('Bsft.Shop.Payments', '[Obsolete]\npublic sealed record OrderPlaced(int Id);') })), 'name-duplicate');
+});
+
+test('name-duplicate: every declaration hidden is still reported', () => {
+  const hidden = '[EditorBrowsable(EditorBrowsableState.Never)]\npublic sealed record OrderPlaced(int Id);';
+  only(run(withFiles({
+    'src/Bsft.Shop.Abstractions/Ordering/OrderPlaced.cs': type('Bsft.Shop.Ordering', hidden),
+    'src/Bsft.Shop/Payments/OrderPlaced.cs': type('Bsft.Shop.Payments', hidden)
+  })), 'name-duplicate');
+});
+
+test('name-duplicate: the fully qualified EditorBrowsable form counts as hidden', () => {
+  const fullyQualified = '[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]\npublic sealed record OrderPlaced(int Id);';
+  assert.deepEqual(run(withFiles({ 'src/Bsft.Shop/Payments/OrderPlaced.cs': type('Bsft.Shop.Payments', fullyQualified) })), []);
+  only(run(withFiles({ 'src/Bsft.Shop/Payments/OrderPlaced.cs': type('Bsft.Shop.Payments', 'public sealed record OrderPlaced(int Id);') })), 'name-duplicate');
+});
+
 test('name-namespace-type: a type named like a segment of its namespace', () => {
   only(run(withFiles({ 'src/Bsft.Shop/Shop.cs': type('Bsft.Shop', 'public static class Shop { }') })), 'name-namespace-type');
 });
@@ -490,10 +511,11 @@ test('readDeclarations reads top-level types only, with modifiers, spans and ent
     '',
     'file sealed record Local(int X);',
     'internal delegate void Callback(int value);',
+    'public delegate Task<TResponse> Attempt<TResponse>(IServiceProvider scope, Func<Task<TResponse>> rest);',
   ].join('\n');
   const d = readDeclarations(source);
   assert.deepEqual(d.namespaces.map((n) => [n.name, n.fileScoped]), [['Bsft.Shop.DependencyInjection', true]]);
-  assert.deepEqual(d.types.map((t) => [t.kind, t.name, t.public]), [['class', 'ShopServiceCollectionExtensions', true], ['record', 'Local', false], ['delegate', 'Callback', false]]);
+  assert.deepEqual(d.types.map((t) => [t.kind, t.name, t.public]), [['class', 'ShopServiceCollectionExtensions', true], ['record', 'Local', false], ['delegate', 'Callback', false], ['delegate', 'Attempt', true]]);
   assert.deepEqual(d.extensionMethods, [
     { name: 'AddBsftShop', extends: 'IServiceCollection', type: 'ShopServiceCollectionExtensions' },
     { name: 'MapBsftShop', extends: 'T', type: 'ShopServiceCollectionExtensions' },
@@ -510,7 +532,7 @@ test('the command line exits 1 on a violation and 0 on a conforming tree', () =>
       writeFileSync(join(root, path), content);
     }
     writeFileSync(join(root, 'Bsft.sln'), solutionFor(files));
-    const script = new URL('../verify-structure.mjs', import.meta.url).pathname;
+    const script = fileURLToPath(new URL('../verify-structure.mjs', import.meta.url));
     execFileSync(process.execPath, [script, '--root', root], { stdio: 'pipe' });
     writeFileSync(join(root, 'src/Bsft.Shop/ShopDefaults.cs'), type('Bsft.Wrong', 'public static class ShopDefaults { }'));
     assert.throws(() => execFileSync(process.execPath, [script, '--root', root], { stdio: 'pipe' }), (e) => e.status === 1 && /\[namespace-folder\]/.test(e.stderr.toString()));

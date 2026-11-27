@@ -2,6 +2,7 @@ using Bsft.Core;
 using Bsft.EventAggregator.Saga.EFCore.Tests.Support;
 using Bsft.EventAggregator.Saga.Persistence;
 using Bsft.EventAggregator.Saga.Timeouts;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -41,7 +42,7 @@ public class EFCoreSagaPersistenceWindowTests : IDisposable
 
         var scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
         _window = new EFCoreSagaPersistenceWindow(scopeFactory);
-        _states = new EFCoreSagaStore(scopeFactory, window: _window);
+        _states = new EFCoreSagaStore(scopeFactory, new ManualTimeProvider(DateTimeOffset.UnixEpoch), _window);
         _timeouts = new EFCoreSagaTimeoutStore(scopeFactory, _window);
     }
 

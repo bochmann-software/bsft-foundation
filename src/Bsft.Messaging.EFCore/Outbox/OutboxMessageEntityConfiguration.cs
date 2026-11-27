@@ -1,3 +1,4 @@
+using Bsft.Data.MultiTenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -26,7 +27,17 @@ public sealed class OutboxMessageEntityConfiguration : IEntityTypeConfiguration<
     {
         builder.ToTable("OutboxMessages");
 
-        builder.HasKey(e => e.Id);
+        // Under UseTenantKeys the row carries its tenant, which leads the key and the claim index, and
+        // its id is made by the client; without it the table keeps its identity key and no tenant column.
+        var isTenantKeyed = builder.IsTenantKeyed();
+
+        if (isTenantKeyed)
+            builder.HasTenantKey(e => e.TenantId, e => e.Id);
+        else
+        {
+            builder.HasKey(e => e.Id);
+            builder.Ignore(e => e.TenantId);
+        }
 
         // A length is mandatory on the indexed column, not cosmetic: an unbounded string maps to
         // nvarchar(max) on SQL Server, which is rejected outright as an index key column.
@@ -42,7 +53,10 @@ public sealed class OutboxMessageEntityConfiguration : IEntityTypeConfiguration<
         // whose retry instant has passed, ordered by Id; the composite index covers the filter and the
         // ordering of that one hot query. NextAttemptAt sits with the other predicates and before Id,
         // which is the ordering column, so the index still answers the whole query.
-        builder.HasIndex(e => new { e.ProcessedAt, e.DeadLetteredAt, e.LeasedUntil, e.NextAttemptAt, e.Id });
+        if (isTenantKeyed)
+            builder.HasIndex(e => new { e.TenantId, e.ProcessedAt, e.DeadLetteredAt, e.LeasedUntil, e.NextAttemptAt, e.Id });
+        else
+            builder.HasIndex(e => new { e.ProcessedAt, e.DeadLetteredAt, e.LeasedUntil, e.NextAttemptAt, e.Id });
 
         // Not unique: at-least-once delivery may republish an event, and a consumer deduplicates on
         // this id. Enforcing uniqueness here would instead break the producer whose events legitimately

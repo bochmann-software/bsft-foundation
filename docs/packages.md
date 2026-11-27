@@ -7,6 +7,9 @@ point column names the `IServiceCollection` method a host calls (`—` for
 `.Abstractions` packages, which register nothing). `Bsft.Templates` is the one
 row that names a command instead: it is a `dotnet new` template pack and ships
 no assembly, so there is no entry point for a host to call.
+A row whose entry point says `(unreleased)` belongs to a package that does not
+ship yet: its project sets `IsPackable` to `false`, and the structure check
+refuses the one without the other.
 
 | Package | Documented in | Entry point |
 | --- | --- | --- |
@@ -23,13 +26,15 @@ no assembly, so there is no entry point for a host to call.
 | `Bsft.Data.Postgres` | [data.md](data.md) | `DataPostgresServiceCollectionExtensions.AddBsftDataPostgres` |
 | `Bsft.Data.SqlServer` | [data.md](data.md) | `DataSqlServerServiceCollectionExtensions.AddBsftDataSqlServer` |
 | `Bsft.Data.Sqlite` | [data.md](data.md) | `DataSqliteServiceCollectionExtensions.AddBsftDataSqlite` |
-| `Bsft.Data` | [data.md](data.md) | `DataServiceCollectionExtensions.AddBsftDataQueryFiltering` / `.AddBsftDataMultiTenancy` |
+| `Bsft.Data` | [data.md](data.md) | `DataServiceCollectionExtensions.AddBsftDataQueryFiltering` / `.AddBsftDataMultiTenancy`, `KeysetPagingServiceCollectionExtensions.AddBsftDataKeysetPaging` |
 | `Bsft.EventAggregator.Saga.Correlation` | [saga.md](saga.md) | `AddBsftSagaCorrelation` |
 | `Bsft.EventAggregator.Saga.EFCore` | [saga.md](saga.md) | `AddBsftSagaEFCore<TContext>` |
 | `Bsft.EventAggregator.Saga` | [saga.md](saga.md) | `AddBsftSaga` |
 | `Bsft.EventAggregator` | [event-aggregator.md](event-aggregator.md) | `AddBsftEventAggregator` |
-| `Bsft.Hosting` | [hosting.md](hosting.md) | `HostingServiceCollectionExtensions.AddBsftDefaults`, `ObserverServiceCollectionExtensions.AddBsftObservers` |
+| `Bsft.Hosting` | [hosting.md](hosting.md) | `CorsServiceCollectionExtensions.AddBsftCors`, `RateLimitingServiceCollectionExtensions.AddBsftRateLimiting`, `HealthChecksServiceCollectionExtensions.AddBsftHealthChecks` (opt-in `BsftHealthCheckConfiguration.AddHostedWorkStartGates`), `ObserverServiceCollectionExtensions.AddBsftObservers`, `HeadersServiceCollectionExtensions.AddBsftSecurityHeaders` (`HeadersApplicationBuilderExtensions.UseBsftSecurityHeaders`) |
 | `Bsft.Hosting.BackgroundWork` | [hosting.md](hosting.md#background-work) | `BackgroundWorkServiceCollectionExtensions.AddBsftBackgroundWorkRunOnce`, `PipelineServiceCollectionExtensions.AddBsftBatchingWriter` |
+| `Bsft.Hosting.OpenApi` | [hosting.md](hosting.md) | `HostingServiceCollectionExtensions.AddBsftDefaults`, `HostingApplicationBuilderExtensions.UseBsftDefaults`, `SwaggerServiceCollectionExtensions.AddBsftSwagger`, `VersioningServiceCollectionExtensions.AddBsftApiVersioning` |
+| `Bsft.Hosting.StartGates` | [hosting.md](hosting.md#start-gates-for-hosted-loops) | `StartGatesServiceCollectionExtensions.AddBsftHostedWorkStartGate<TGate>`, `AddBsftGatedHostedService<TService>` |
 | `Bsft.Http.Egress` | [http-egress.md](http-egress.md) | `HttpEgressServiceCollectionExtensions.AddBsftHttpEgress` |
 | `Bsft.Http` | [http.md](http.md) | — (static helpers only) |
 | `Bsft.Idempotency.EFCore` | [idempotency.md](idempotency.md) | `AddBsftIdempotencyEFCore<TContext>` |
@@ -51,13 +56,14 @@ no assembly, so there is no entry point for a host to call.
 | `Bsft.Modules` | [modules.md](modules.md) | `ModulesServiceCollectionExtensions.AddBsftModules` |
 | `Bsft.Outbox.Abstractions` | [outbox.md](outbox.md) | — |
 | `Bsft.Outbox.EFCore` | [outbox.md](outbox.md) | — |
-| `Bsft.Outbox` | [outbox.md](outbox.md) | `OutboxServiceCollectionExtensions.AddBsftOutbox<TPayload>` |
+| `Bsft.Outbox.Postgres` | [outbox.md](outbox.md) | `OutboxWakeServiceCollectionExtensions.AddBsftOutboxPostgresWake` |
+| `Bsft.Outbox` | [outbox.md](outbox.md) | `OutboxServiceCollectionExtensions.AddBsftOutbox<TPayload>` (`AddBsftOutboxDrainWorker<TPayload>`) |
 | `Bsft.Observability` | [observability.md](observability.md) | `ObservabilityServiceCollectionExtensions.AddBsftObservability` |
 | `Bsft.Resilience.Mediator` | [resilience.md](resilience.md) | `ResilienceMediatorServiceCollectionExtensions.AddBsftResilienceMediator` |
 | `Bsft.Resilience` | [resilience.md](resilience.md) | `ResilienceServiceCollectionExtensions.AddBsftResilientHttpClient` |
-| `Bsft.Retention` | [retention.md](retention.md) | `AddBsftRetention<TPass>` |
+| `Bsft.Retention` | [retention.md](retention.md) | `AddBsftRetention<TPass>`, `AddBsftRetentionDiskWatermark<TSource>` |
 | `Bsft.Scheduling.Correlation` | [scheduling.md](scheduling.md) | `AddBsftSchedulingCorrelation` |
 | `Bsft.Scheduling.EFCore` | [scheduling.md](scheduling.md) | `AddBsftSchedulingEFCore<TContext>` |
 | `Bsft.Schema` | [schema.md](schema.md) | `SchemaServiceCollectionExtensions.AddBsftSchema` |
-| `Bsft.Scheduling` | [scheduling.md](scheduling.md) | `AddBsftScheduling` |
+| `Bsft.Scheduling` | [scheduling.md](scheduling.md) | `AddBsftScheduling` (`AddBsftSchedulingProducer`) |
 | `Bsft.Testing` | [testing.md](testing.md) | `TestingServiceCollectionExtensions.AddBsftTestContexts` |

@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Bsft.Messaging.RabbitMQ\Bsft.Messaging.RabbitMQ.csproj" />
     <ProjectReference Include="..\..\src\Bsft.Messaging\Bsft.Messaging.csproj" />
   </ItemGroup>

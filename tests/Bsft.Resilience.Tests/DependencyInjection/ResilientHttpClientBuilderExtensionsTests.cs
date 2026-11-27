@@ -1,7 +1,9 @@
 using System.Net;
+using Bsft.Idempotency;
 using Bsft.Resilience.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http.Resilience;
 using Polly.CircuitBreaker;
 using Xunit;
 
@@ -91,6 +93,87 @@ public class ResilientHttpClientBuilderExtensionsTests
 
         brokenCircuitObserved.Should().BeTrue();
     }
+
+    [Fact]
+    public void IdempotencyKeyHeaderName_MatchesTheNameBsftIdempotencyReads()
+        => ResilienceDefaults.IdempotencyKeyHeaderName.Should().Be(IdempotencyDefaults.HeaderName);
+
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("PATCH")]
+    public async Task UnsafeMethod_WithoutIdempotencyKey_IsNotRetried(string method)
+    {
+        var handler = new SequencedHandler(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK);
+        using var provider = BuildProvider(handler, ZeroDelay);
+
+        var response = await CreateClient(provider).SendAsync(Request(method));
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        handler.CallCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("PATCH")]
+    public async Task UnsafeMethod_WithIdempotencyKey_IsRetried(string method)
+    {
+        var handler = new SequencedHandler(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK);
+        using var provider = BuildProvider(handler, ZeroDelay);
+        var request = Request(method);
+        request.Headers.Add(ResilienceDefaults.IdempotencyKeyHeaderName, "key-1");
+
+        var response = await CreateClient(provider).SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.CallCount.Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData("GET")]
+    [InlineData("HEAD")]
+    [InlineData("OPTIONS")]
+    [InlineData("TRACE")]
+    [InlineData("PUT")]
+    [InlineData("DELETE")]
+    public async Task SafeOrIdempotentMethod_IsRetried(string method)
+    {
+        var handler = new SequencedHandler(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK);
+        using var provider = BuildProvider(handler, ZeroDelay);
+
+        var response = await CreateClient(provider).SendAsync(Request(method));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.CallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ConsumerOverride_OfShouldHandle_StillWins()
+    {
+        var handler = new SequencedHandler(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK);
+        var services = new ServiceCollection();
+        services
+            .AddHttpClient("test")
+            .ConfigurePrimaryHttpMessageHandler(() => handler)
+            .AddBsftResilience(ZeroDelay);
+        services.Configure<HttpStandardResilienceOptions>(
+            "test-standard",
+            o => o.Retry.ShouldHandle = args => ValueTask.FromResult(args.Outcome.Result?.StatusCode == HttpStatusCode.ServiceUnavailable));
+        using var provider = services.BuildServiceProvider();
+
+        var response = await CreateClient(provider).SendAsync(Request("POST"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        handler.CallCount.Should().Be(2);
+    }
+
+    private static void ZeroDelay(BsftResilienceOptions o)
+    {
+        o.MaxRetryAttempts = 3;
+        o.BaseDelay = TimeSpan.Zero;
+    }
+
+    private static HttpRequestMessage Request(string method)
+        => new(new HttpMethod(method), new Uri("https://example.test/data"));
 
     private static ServiceProvider BuildProvider(SequencedHandler handler, Action<BsftResilienceOptions> configure)
     {

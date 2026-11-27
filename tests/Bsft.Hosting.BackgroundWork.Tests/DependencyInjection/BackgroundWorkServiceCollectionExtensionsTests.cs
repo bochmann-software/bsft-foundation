@@ -1,6 +1,8 @@
 using Bsft.Hosting.BackgroundWork;
 using Bsft.Hosting.BackgroundWork.DependencyInjection;
 using Bsft.Hosting.BackgroundWork.Tests.Fakes;
+using Bsft.Hosting.StartGates.DependencyInjection;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,6 +14,51 @@ namespace Bsft.Hosting.BackgroundWork.Tests.DependencyInjection;
 
 public sealed class BackgroundWorkServiceCollectionExtensionsTests
 {
+    [Fact]
+    public async Task AddBsftBackgroundWorkRunOnce_WithAPendingStartGate_AttemptsNothingAndCountsTheStartupDelayFromTheOpening()
+    {
+        var gate = new ControllableStartGate();
+        var clock = new RecordingTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<TimeProvider>(clock);
+        services.AddBsftHostedWorkStartGate(_ => gate);
+        services.AddBsftBackgroundWorkRunOnce<RecordingRunOnceService>(options => options.StartupDelay = TimeSpan.FromSeconds(30));
+        using var provider = services.BuildServiceProvider();
+        var service = provider.GetRequiredService<RecordingRunOnceService>();
+        var hosted = provider.GetServices<IHostedService>().Single();
+
+        await hosted.StartAsync(CancellationToken.None);
+        await gate.Awaited;
+
+        service.AttemptCount.Should().Be(0);
+        clock.Delays.Should().BeEmpty();
+
+        gate.Open();
+        await service.FirstAttempt.WaitAsync(TimeSpan.FromSeconds(30));
+
+        clock.Delays.Should().Equal(TimeSpan.FromSeconds(30));
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task AddBsftBackgroundWorkRunOnce_StoppedWhileAStartGateIsPending_StopsWithoutAnAttempt()
+    {
+        var gate = new ControllableStartGate();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBsftHostedWorkStartGate(_ => gate);
+        services.AddBsftBackgroundWorkRunOnce<RecordingRunOnceService>();
+        using var provider = services.BuildServiceProvider();
+        var hosted = provider.GetServices<IHostedService>().Single();
+
+        await hosted.StartAsync(CancellationToken.None);
+        await gate.Awaited;
+        await hosted.StopAsync(CancellationToken.None);
+
+        provider.GetRequiredService<RecordingRunOnceService>().AttemptCount.Should().Be(0);
+    }
+
     [Fact]
     public void AddBsftBackgroundWorkRunOnce_RegistersTheServiceAsAHostedServiceWithItsNamedOptions()
     {

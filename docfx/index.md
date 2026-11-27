@@ -21,7 +21,7 @@ hosting defaults, correlation and the mediator needs three of them:
 ```bash
 dotnet new webapi -n Orders.Api
 cd Orders.Api
-dotnet add package Bsft.Hosting
+dotnet add package Bsft.Hosting.OpenApi
 dotnet add package Bsft.Correlation
 dotnet add package Bsft.Mediator
 ```
@@ -33,7 +33,7 @@ A command, its handler and the host that dispatches it:
 ```csharp
 using Bsft.Core;
 using Bsft.Correlation.DependencyInjection;
-using Bsft.Hosting.DependencyInjection;
+using Bsft.Hosting.OpenApi.DependencyInjection;
 using Bsft.Mediator;
 using Bsft.Mediator.DependencyInjection;
 using Microsoft.AspNetCore.Mvc;

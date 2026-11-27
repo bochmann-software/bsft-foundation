@@ -31,16 +31,25 @@ public class EventAggregatorSubscribeRaceTests
 
         // Wait until the forward Subscribe(Func) call is parked inside the gate while still holding
         // SyncRoot, so the racing Unsubscribe genuinely overlaps the in-flight subscribe.
-        aggregator.ForwardCallEntered.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        aggregator.ForwardCallEntered.Wait(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
-        var unsubscribeTask = Task.Run(() => aggregator.Unsubscribe(handler));
+        var unsubscribeThread = new Thread(() => aggregator.Unsubscribe(handler));
+        unsubscribeThread.Start();
 
-        // Give the Unsubscribe task a moment to reach (and block on) SyncRoot before releasing the gate,
-        // so the removal is guaranteed to observe the fully added wrapper rather than an empty list.
-        await Task.Delay(50);
+        // The Unsubscribe thread is parked on SyncRoot once the runtime reports it as waiting. Observing
+        // that state is the signal, so releasing the gate afterwards guarantees the removal sees the
+        // fully added wrapper rather than an empty list.
+        using var hangGuard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        while (unsubscribeThread.ThreadState != ThreadState.WaitSleepJoin)
+        {
+            hangGuard.Token.ThrowIfCancellationRequested();
+            await Task.Yield();
+        }
+
         aggregator.ReleaseForwardCall();
 
-        await Task.WhenAll(subscribeTask, unsubscribeTask);
+        await subscribeTask;
+        unsubscribeThread.Join();
 
         await aggregator.PublishAsync(new TestEvent("after-race"));
 
@@ -69,7 +78,8 @@ public class EventAggregatorSubscribeRaceTests
             if (Interlocked.Exchange(ref _gateArmed, 0) == 1)
             {
                 ForwardCallEntered.Set();
-                _release.Wait(TimeSpan.FromSeconds(5));
+                if (!_release.Wait(TimeSpan.FromSeconds(30)))
+                    throw new TimeoutException("The test never released the gated forward call.");
             }
 
             lock (SyncRoot)

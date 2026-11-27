@@ -1,12 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\DependencyClosure.cs" Link="Shared\DependencyClosure.cs" />
     <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
     <Compile Include="..\Shared\RecordingTimeProvider.cs" Link="Shared\RecordingTimeProvider.cs" />
     <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+    <Compile Include="..\Shared\ControllableStartGate.cs" Link="Shared\ControllableStartGate.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Bsft.Hosting\Bsft.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Hosting.StartGates\Bsft.Hosting.StartGates.csproj" />
   </ItemGroup>
 
   <ItemGroup>

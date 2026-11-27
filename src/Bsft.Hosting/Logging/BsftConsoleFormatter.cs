@@ -41,7 +41,7 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
     /// <param name="options">The monitor providing formatter options.</param>
     /// <param name="timeProvider">The time provider used for timestamps.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
-    public BsftConsoleFormatter(IOptionsMonitor<BsftConsoleFormatterOptions> options, TimeProvider? timeProvider = null)
+    public BsftConsoleFormatter(IOptionsMonitor<BsftConsoleFormatterOptions> options, TimeProvider timeProvider)
         : this(options, new ScopeLineEncoder(), timeProvider)
     {
     }
@@ -56,11 +56,12 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
     public BsftConsoleFormatter(
         IOptionsMonitor<BsftConsoleFormatterOptions> options,
         IScopeLineEncoder encoder,
-        TimeProvider? timeProvider = null)
+        TimeProvider timeProvider)
         : base(HostingDefaults.ConsoleFormatterName)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(encoder);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         _encoder = encoder;
         _options = options.CurrentValue;
@@ -70,7 +71,7 @@ public sealed class BsftConsoleFormatter : ConsoleFormatter, IDisposable
             _options = updated;
             _scopeKeys = DistinctKeys(updated);
         });
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc />

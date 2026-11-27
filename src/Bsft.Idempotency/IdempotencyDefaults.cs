@@ -53,6 +53,13 @@ public static class IdempotencyDefaults
     /// </summary>
     public const string PayloadTooLargeErrorCode = "IDEMPOTENCY_PAYLOAD_TOO_LARGE";
 
+    /// <summary>
+    /// The <c>errorCode</c> of the 409 answered when a request is repeated whose response carried a
+    /// secret that is not available for replay (<see cref="SensitiveIdempotentResponseAttribute"/>). The
+    /// first request ran and its secret was issued; the client rotates it rather than retrying.
+    /// </summary>
+    public const string ResponseWithheldErrorCode = "IDEMPOTENCY_RESPONSE_WITHHELD";
+
     /// <summary>The key of the <c>errors</c> entry a malformed key is reported under.</summary>
     public const string KeyValidationField = "idempotencyKey";
 

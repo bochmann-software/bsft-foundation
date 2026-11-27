@@ -78,13 +78,30 @@ public interface ITestClock
 ```
 
 `TestClock` derives from `TimeProvider`, so registering it as the
-`TimeProvider` makes every framework component that respects the clock — saga
-timeouts, the scheduler, the outbox — virtual. It starts at
+`TimeProvider` moves the time every framework component reads from the clock,
+such as the due time of a saga timeout or a scheduled job. It starts at
 `DateTimeOffset.UnixEpoch`. `Advance` refuses a negative span.
 
-Only `GetUtcNow()` is overridden; timers created from the base class still run on
-the real clock. Advance the clock and drive the pass explicitly rather than
-waiting for a timer to fire.
+`TestClock` drives its timers and its timestamp. `Advance` (and a forward `SetUtcNow`) runs every timer
+that falls due, so a `Task.Delay`, a `CancellationTokenSource` with a timeout or a background service's periodic timer
+created over the clock completes when the test advances past it, and never by itself. A timer with a zero due time
+fires at once. `GetTimestamp` grows only with the clock, so `GetElapsedTime` deadlines end on `Advance`.
+`Advance` is additive and safe to call from a callback or from several threads; `SetUtcNow` is absolute (last writer
+wins) and may move the clock backward, which fires nothing.
+
+To wait for the component under test to start waiting, await `clock.WaitForTimerAsync(dueIn, ct)` or
+`clock.WaitForAnyTimerAsync(ct)` instead of polling or sleeping, then advance. Both end with a `TimeoutException`
+after 30 seconds of real time. An armed timer shows that a loop is waiting only for a loop that holds a timer solely
+while it waits, such as a `Task.Delay` loop; a `PeriodicTimer` is armed during the pass as well, so for it wait for
+something the pass does. Test projects that cannot reference
+`Bsft.Testing` link `tests/Shared/ManualTimeProvider.cs`, which shares the additive `Advance`, the timestamp and the
+signals but not the rest: a zero due time waits for the next `Advance` and a throwing callback ends it. While the clock stands still,
+background polling stops, so a hosted test waiting for an outbox or job pass has to advance it.
+`Bsft.AI.Tests` drives the model-call timeouts with `FakeTimeProvider` from
+`Microsoft.Extensions.TimeProvider.Testing`; its `Support/PendingTimersTimeProvider` adds only a count of
+armed one-shot timers, because the retry tests have to wait until the loop holds a given number of them
+(the sequence bound, the attempt bound and the backoff wait) before they advance. Settling on one clock for
+all test projects is still open.
 
 ## Mediator harness
 

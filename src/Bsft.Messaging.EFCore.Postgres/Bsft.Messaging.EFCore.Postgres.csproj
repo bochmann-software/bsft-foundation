@@ -11,6 +11,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
     <ProjectReference Include="..\Bsft.Messaging.EFCore\Bsft.Messaging.EFCore.csproj" />
+    <ProjectReference Include="..\Bsft.Outbox.Postgres\Bsft.Outbox.Postgres.csproj" />
+    <ProjectReference Include="..\Bsft.Hosting.StartGates\Bsft.Hosting.StartGates.csproj" />
   </ItemGroup>
 
   <ItemGroup>

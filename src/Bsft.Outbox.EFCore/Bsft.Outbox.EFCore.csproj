@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
     <ProjectReference Include="..\Bsft.Outbox.Abstractions\Bsft.Outbox.Abstractions.csproj" />
   </ItemGroup>
 

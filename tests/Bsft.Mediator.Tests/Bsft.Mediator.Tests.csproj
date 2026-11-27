@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\ManualTimestampProvider.cs" Link="Shared\ManualTimestampProvider.cs" />
     <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
   </ItemGroup>
 
@@ -18,8 +19,9 @@
     -->
     <ProjectReference Include="..\..\src\Bsft.Caching.Mediator\Bsft.Caching.Mediator.csproj" />
     <ProjectReference Include="..\..\src\Bsft.Resilience.Mediator\Bsft.Resilience.Mediator.csproj" />
-    <!-- Not referenced by the package under test; only tests/Shared/RelationalModelWarmup.cs needs it,
-         to reuse Bsft.Data's runtime-model warm-up instead of rebuilding it. -->
+    <!-- Not referenced by the package under test. The shared-transaction scenarios run the default
+         chain over Bsft.Data's shared transaction, and tests/Shared/RelationalModelWarmup.cs reuses
+         its runtime-model warm-up instead of rebuilding it. -->
     <ProjectReference Include="..\..\src\Bsft.Data\Bsft.Data.csproj" />
   </ItemGroup>
 

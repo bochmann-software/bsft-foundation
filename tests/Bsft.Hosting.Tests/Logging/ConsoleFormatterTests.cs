@@ -18,7 +18,7 @@ public class ConsoleFormatterTests
 
         options.CurrentValue.Returns(formatterOptions);
         options.OnChange(Arg.Any<Action<BsftConsoleFormatterOptions, string?>>()).Returns((IDisposable?)null);
-        return new BsftConsoleFormatter(options);
+        return new BsftConsoleFormatter(options, TimeProvider.System);
     }
 
     [Fact]
@@ -459,7 +459,7 @@ public class ConsoleFormatterTests
     {
         var monitor = Substitute.For<IOptionsMonitor<BsftConsoleFormatterOptions>>();
         monitor.CurrentValue.Returns(new BsftConsoleFormatterOptions { PersistedScopeKeys = null! });
-        using var formatter = new BsftConsoleFormatter(monitor);
+        using var formatter = new BsftConsoleFormatter(monitor, TimeProvider.System);
         var writer = new StringWriter();
         var scopes = new ScopeList(new Dictionary<string, object> { ["CorrelationId"] = "c1", ["RunId"] = "r" });
 
@@ -475,7 +475,7 @@ public class ConsoleFormatterTests
         var monitor = Substitute.For<IOptionsMonitor<BsftConsoleFormatterOptions>>();
         monitor.CurrentValue.Returns(new BsftConsoleFormatterOptions());
         monitor.OnChange(Arg.Do<Action<BsftConsoleFormatterOptions, string?>>(action => listener = action)).Returns((IDisposable?)null);
-        using var formatter = new BsftConsoleFormatter(monitor, new Bsft.Logging.Sinks.ScopeLineEncoder());
+        using var formatter = new BsftConsoleFormatter(monitor, new Bsft.Logging.Sinks.ScopeLineEncoder(), TimeProvider.System);
         var changed = new BsftConsoleFormatterOptions();
         changed.PersistedScopeKeys.Add("RunId");
         listener!(changed, null);
@@ -491,7 +491,7 @@ public class ConsoleFormatterTests
     {
         var monitor = Substitute.For<IOptionsMonitor<BsftConsoleFormatterOptions>>();
 
-        var act = () => new BsftConsoleFormatter(monitor, (Bsft.Logging.Sinks.IScopeLineEncoder)null!);
+        var act = () => new BsftConsoleFormatter(monitor, (Bsft.Logging.Sinks.IScopeLineEncoder)null!, TimeProvider.System);
 
         act.Should().Throw<ArgumentNullException>();
     }

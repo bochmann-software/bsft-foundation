@@ -17,7 +17,8 @@ backlog exactly as two polling instances do.
 dotnet add package Bsft.Messaging.EFCore.Postgres
 ```
 
-Requires `Bsft.Messaging.EFCore` and `Npgsql.EntityFrameworkCore.PostgreSQL`. The listener needs no
+Requires `Bsft.Messaging.EFCore`, `Bsft.Outbox.Postgres` (the listening session and its reconnecting
+loop, pulled transitively) and `Npgsql.EntityFrameworkCore.PostgreSQL`. The listener needs no
 schema of its own: `LISTEN`/`NOTIFY` is a server feature, so there is no migration to add.
 
 ## Register
@@ -60,9 +61,11 @@ start.
 | --- | --- | --- |
 | `IOutboxNotifier` | `PostgresOutboxNotifier` — `SELECT pg_notify(channel, '')` through the context that wrote the rows | The announcement has to travel some other way, or has to carry something. Implementations are best-effort by contract: the rows are committed by the time this runs, so a failed announcement is reported and swallowed rather than thrown at the caller's save. |
 
-The listening session behind the worker is internal. It is one Npgsql connection that subscribes,
-waits and calls back; everything with a decision in it — when to reconnect, what to drain, what to
-log — is in the worker, which is what the tests exercise.
+The listening session behind the worker is `IPostgresListenSession` of `Bsft.Outbox.Postgres`, shared
+with the wake-up of every other outbox: one Npgsql connection that subscribes, waits and calls back,
+inside that package's `PostgresListenLoop`, which reconnects. What this package decides is which
+connection and channel to listen on and what to drain; both are in the worker and the channel, which
+is what the tests exercise.
 
 ## How it fits together
 

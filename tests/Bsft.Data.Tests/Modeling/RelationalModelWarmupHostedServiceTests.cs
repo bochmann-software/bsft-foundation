@@ -114,7 +114,9 @@ public sealed class RelationalModelWarmupHostedServiceTests
 
         other.IsEnabled().Should().BeFalse();
         entityFramework.IsEnabled(CoreEventId.ContextInitialized.Name!).Should().BeTrue();
-        entityFramework.IsEnabled(CoreEventId.ContextDisposed.Name!).Should().BeFalse();
+        // The listener is process-wide: any other subscriber alive in a parallel test, such as the shared
+        // transaction's, may enable further events on it, so the filter is asserted on its own.
+        ContextInitializedObserver.IsContextInitialized(CoreEventId.ContextDisposed.Name!).Should().BeFalse();
     }
 
     [Fact]

@@ -30,7 +30,7 @@ public class EFCoreJobRunReaderTests : IDisposable
             new DbContextOptionsBuilder<TestJobDbContext>().UseSqlite(_connection).Options);
         _db.Database.EnsureCreated();
 
-        _reader = new EFCoreJobRunReader(_db);
+        _reader = new EFCoreJobRunReader(_db, new JobRunMapper());
     }
 
     public void Dispose()
@@ -42,8 +42,31 @@ public class EFCoreJobRunReaderTests : IDisposable
 
     [Fact]
     public void TheConstructorRejectsAMissingContext() =>
-        ((Action)(() => new EFCoreJobRunReader(null!)))
+        ((Action)(() => new EFCoreJobRunReader(null!, new JobRunMapper())))
             .Should().Throw<ArgumentNullException>().WithParameterName("db");
+
+    [Fact]
+    public void TheConstructorRejectsAMissingMapper() =>
+        ((Action)(() => new EFCoreJobRunReader(_db, null!)))
+            .Should().Throw<ArgumentNullException>().WithParameterName("mapper");
+
+    [Fact]
+    public async Task ListAsyncAnswersTheResultTheJobRecordedAsJson()
+    {
+        var run = Run("mail-dispatch", status: JobRunStatus.Completed, settled: _now);
+        run.ResultSchema = "mail-dispatch/v1";
+        run.Result = """{"sent":118,"failed":2}""";
+        Store(run, Run("silent"));
+
+        var page = await _reader.ListAsync(null, JobRunOrder.DueDescending, Request());
+
+        var recorded = page.Items.Single(item => item.JobName == "mail-dispatch").Result;
+        recorded.Should().NotBeNull();
+        recorded!.Schema.Should().Be("mail-dispatch/v1");
+        recorded.Value.GetProperty("sent").GetInt32().Should().Be(118);
+        recorded.Value.GetProperty("failed").GetInt32().Should().Be(2);
+        page.Items.Single(item => item.JobName == "silent").Result.Should().BeNull();
+    }
 
     [Fact]
     public async Task ListAsyncRejectsAMissingPageRequest()
@@ -217,6 +240,19 @@ public class EFCoreJobRunReaderTests : IDisposable
         view.Should().NotBeNull();
         view!.Summary.JobName.Should().Be("nightly-import");
         view.Payload.Should().Be("""{"since":"2026-08-19"}""");
+    }
+
+    [Fact]
+    public async Task FindAsyncAnswersTheResultTheJobRecorded()
+    {
+        var run = Run("mail-dispatch", status: JobRunStatus.Failed, settled: _now);
+        run.ResultSchema = "mail-dispatch/v1";
+        run.Result = """{"sent":3}""";
+        Store(run);
+
+        var view = await _reader.FindAsync(run.Id);
+
+        view!.Summary.Result.Should().Be(TestRunResults.Of("mail-dispatch/v1", """{"sent":3}"""));
     }
 
     [Fact]

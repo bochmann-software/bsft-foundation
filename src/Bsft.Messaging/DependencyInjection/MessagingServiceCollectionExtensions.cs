@@ -1,3 +1,4 @@
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Bsft.Outbox;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -284,7 +285,8 @@ public static class MessagingServiceCollectionExtensions
         services.TryAddSingleton<IIncomingMessageDecoder, IncomingMessageDecoder>();
         services.TryAddSingleton<IIntegrationEventConsumer, IntegrationEventConsumer>();
 
-        services.AddHostedService<IntegrationEventConsumerHost>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddBsftGatedHostedService<IntegrationEventConsumerHost>();
 
         return services;
     }

@@ -161,7 +161,7 @@ function classify(header) {
     const kind = /^(\w+)/.exec(rest)[1];
     return { name: m[1], kind, modifiers };
   }
-  m = /^delegate\s+[\s\S]*?([A-Za-z_]\w*)\s*(?:<[^()]*>)?\s*\(/.exec(rest);
+  m = /^delegate\s+[\s\S]*?([A-Za-z_]\w*)\s*(?:<[^()<>]*(?:<[^()<>]*>[^()<>]*)*>)?\s*\(/.exec(rest);
   if (m) return { name: m[1], kind: 'delegate', modifiers };
   return null;
 }
@@ -224,6 +224,7 @@ export function readDeclarations(text) {
           public: found.modifiers.includes('public'),
           partial: found.modifiers.includes('partial'),
           static: found.modifiers.includes('static'),
+          hidden: /\[\s*(?:System\.ComponentModel\.)?EditorBrowsable\s*\(\s*(?:System\.ComponentModel\.)?EditorBrowsableState\.Never\s*\)\s*\]/.test(header),
           namespace: namespaces.at(-1)?.name ?? null,
           header: dropAttributes(header).replace(/\s+/g, ' '),
           start: headerStart,

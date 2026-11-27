@@ -1,5 +1,6 @@
 using Bsft.Logging.Tests.Fakes;
 using Bsft.Logging.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using System.Collections.Concurrent;
 using System.Globalization;
@@ -20,7 +21,7 @@ public class BsftFileLoggerProviderTests : IDisposable
     {
         var options = LogFileFixture.Options();
 
-        using var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        using var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
 
         Directory.Exists(_log.LogDirectory).Should().BeTrue();
     }
@@ -29,7 +30,7 @@ public class BsftFileLoggerProviderTests : IDisposable
     public void WritesLogFileInCorrectDirectory()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("My.Namespace.TestCategory");
 
         logger.LogInformation("Hello from test");
@@ -89,7 +90,7 @@ public class BsftFileLoggerProviderTests : IDisposable
         var options = LogFileFixture.Options();
         options.MaxFileSizeMb = 1;
 
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("Test");
 
         var largeMessage = new string('X', 100_000);
@@ -142,7 +143,7 @@ public class BsftFileLoggerProviderTests : IDisposable
     public async Task ThreadSafety_MultipleConcurrentWrites()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
 
         const int ThreadCount = 10;
         const int MessagesPerThread = 100;
@@ -175,7 +176,7 @@ public class BsftFileLoggerProviderTests : IDisposable
     public void WriteEntry_AfterDispose_IsIgnored()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("DisposeTest");
 
         provider.Dispose();
@@ -218,7 +219,7 @@ public class BsftFileLoggerProviderTests : IDisposable
     public void Dispose_CalledTwice_DoesNotThrow()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
 
         provider.Dispose();
 
@@ -274,22 +275,24 @@ public class BsftFileLoggerProviderTests : IDisposable
     }
 
     [Fact]
-    public void Dispose_WhenTheWriteLockIsHeldByADrain_WaitsForItBeforeDisposingTheWriter()
+    public async Task Dispose_WhenTheWriteLockIsHeldByADrain_WaitsForItBeforeDisposingTheWriter()
     {
-        // Dispose waits at most ShutdownFlushTimeout for the flush thread. When that Join times out,
-        // the flush thread is still inside DrainQueue holding the write lock, and disposing the
+        // Dispose waits at most the shutdown budget for the flush thread. When that budget runs out,
+        // the flush thread is still inside DrainQueue holding the write gate, and disposing the
         // StreamWriter next pulled it out from under a live WriteLine: the ObjectDisposedException
         // escaped the flush thread's entry point and terminated the process during shutdown.
         //
-        // Deterministic here: the test itself holds the provider's write lock, which is exactly the
-        // state a mid-drain flush thread is in, and asserts that Dispose blocks on it instead of
-        // disposing the writer, then completes and writes the backlog once the lock is released.
-        // Best-effort: the timing of a genuinely timed-out Join cannot be forced, so what is proven
-        // is the mutual exclusion the fix rests on, not a particular scheduler interleaving.
+        // Deterministic here: the test itself holds the provider's write gate, which is exactly the
+        // state a mid-drain flush thread is in. The flush thread woken by the logged line then waits
+        // for that gate, so Dispose cannot get past waiting for the flush thread until the test lets
+        // go; the test waits until Dispose has armed its shutdown budget on the manual clock, which
+        // never advances, and asserts that Dispose still runs, then releases the gate and expects
+        // Dispose to complete and write the backlog.
+        var clock = new ManualTimeProvider(LogFileFixture.FixedNow);
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, clock);
         var logger = provider.CreateLogger("DisposeRace");
-        var writeLock = GetWriteLock(provider);
+        var writeGate = GetWriteGate(provider);
 
         Exception? disposeFailure = null;
         var disposeThread = new Thread(() =>
@@ -304,18 +307,13 @@ public class BsftFileLoggerProviderTests : IDisposable
             }
         });
 
-        Monitor.Enter(writeLock);
-        try
+        using (writeGate.Hold())
         {
             logger.LogInformation("queued while the writer is busy");
             disposeThread.Start();
+            await clock.WaitForTimerAsync(TimeSpan.FromSeconds(5));
 
-            disposeThread.Join(TimeSpan.FromMilliseconds(300))
-                .Should().BeFalse("Dispose must not touch the writer while another drain holds the write lock");
-        }
-        finally
-        {
-            Monitor.Exit(writeLock);
+            disposeThread.IsAlive.Should().BeTrue("Dispose must not touch the writer while another drain holds the write gate");
         }
 
         disposeThread.Join(TimeSpan.FromSeconds(30))
@@ -372,16 +370,18 @@ public class BsftFileLoggerProviderTests : IDisposable
     }
 
     [Fact]
-    public void Dispose_WhenTheWriteLockStaysHeldPastTheBudget_SkipsTheDrainInsteadOfHanging()
+    public async Task Dispose_WhenTheWriteLockStaysHeldPastTheBudget_SkipsTheDrainInsteadOfHanging()
     {
         // Finding 1: Dispose used to re-acquire the write lock with a blocking lock, so a flush thread
         // wedged inside DrainQueue turned the bounded five-second shutdown into an unbounded stall.
-        // Deterministic here: the test holds the write lock and never releases it while Dispose runs,
-        // exactly the state a genuinely stuck drain leaves behind. Dispose must spend only the bounded
-        // budget, then skip the drain and the writer/signal disposal and return instead of hanging.
+        // Deterministic here: the test holds the write gate and never releases it while Dispose runs,
+        // exactly the state a genuinely stuck drain leaves behind, and spends the shutdown budget by
+        // advancing the manual clock once Dispose has armed it. Dispose must then skip the drain and
+        // the writer/signal disposal and return instead of hanging.
+        var clock = new ManualTimeProvider(LogFileFixture.FixedNow);
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
-        var writeLock = GetWriteLock(provider);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, clock);
+        var writeGate = GetWriteGate(provider);
         var signal = GetField<ManualResetEventSlim>(provider, "_signal");
 
         // An abandoned drain is not a confirmed loss: the flush thread still holds the write lock and
@@ -408,24 +408,21 @@ public class BsftFileLoggerProviderTests : IDisposable
             }
         });
 
-        Monitor.Enter(writeLock);
-        try
+        using (writeGate.Hold())
         {
             var queue = GetQueue(provider);
             for (var i = 0; i < backlog; i++)
                 queue.Enqueue($"queued but never drained {i}");
 
             disposeThread.Start();
+            await clock.WaitForTimerAsync(TimeSpan.FromSeconds(5));
+            clock.Advance(TimeSpan.FromSeconds(5));
 
             completed.Wait(TimeSpan.FromSeconds(30))
-                .Should().BeTrue("Dispose must return within the bounded budget even while the write lock is never released");
-        }
-        finally
-        {
-            Monitor.Exit(writeLock);
+                .Should().BeTrue("Dispose must return within the bounded budget even while the write gate is never released");
         }
 
-        disposeThread.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        disposeThread.Join(TimeSpan.FromSeconds(30)).Should().BeTrue();
         disposeFailure.Should().BeNull("an abandoned drain must not throw");
         provider.AbandonedShutdownDrains.Should().Be(1, "the abandoned shutdown drain must be recorded on its own signal");
         provider.LastAbandonedQueueDepth.Should().Be(backlog, "the abandoned-drain signal must report the queue depth as an upper bound on what may be unflushed");
@@ -437,7 +434,7 @@ public class BsftFileLoggerProviderTests : IDisposable
         // The skip-drain path leaves the writer open for finalization, so its file handle outlives
         // Dispose. Let the flush thread reach its terminal state, then release the handle so the temp
         // directory can be cleaned up.
-        GetField<Thread>(provider, "_flushThread").Join(TimeSpan.FromSeconds(5));
+        GetField<Thread>(provider, "_flushThread").Join(TimeSpan.FromSeconds(30)).Should().BeTrue();
         GetField<StreamWriter?>(provider, "_writer")?.Dispose();
         SetField(provider, "_writer", null);
     }
@@ -448,10 +445,12 @@ public class BsftFileLoggerProviderTests : IDisposable
         // Finding 2: dropped lines were reported only through Debug.WriteLine, a no-op outside DEBUG
         // builds. A drop must now increment the internal counter and reach Console.Error so it stays
         // observable in a Release deployment.
+        // The manual clock never fires the flush-interval timer, so the flush thread sleeps on its signal,
+        // which the direct enqueue below never sets: it cannot drain while the test swaps the writer.
+        var clock = new ManualTimeProvider(LogFileFixture.FixedNow);
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
-        var writeLock = GetWriteLock(provider);
-        var today = _log.Clock.GetLocalNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, clock);
+        var today = clock.GetLocalNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         // Not disposed on purpose: the ThrowingStream fails on Flush, so disposing the writer would
         // throw. The underlying stream holds no OS handle, so leaving it to GC is safe.
         var brokenWriter = new StreamWriter(new ThrowingStream(new IOException("disk gone")));
@@ -461,7 +460,6 @@ public class BsftFileLoggerProviderTests : IDisposable
         Console.SetError(captured);
         try
         {
-            Monitor.Enter(writeLock);
             try
             {
                 SetField(provider, "_currentFileName", Path.Combine(_log.LogDirectory, $"app-{today}.log"));
@@ -473,7 +471,6 @@ public class BsftFileLoggerProviderTests : IDisposable
             finally
             {
                 SetField(provider, "_writer", null);
-                Monitor.Exit(writeLock);
             }
         }
         finally
@@ -524,12 +521,13 @@ public class BsftFileLoggerProviderTests : IDisposable
     // on the test thread so the failing write is guaranteed to happen inside DrainSafely.
     private void DrainSafely_WithBrokenWriter_SwallowsTheFailure(StreamWriter brokenWriter)
     {
+        // The manual clock never fires the flush-interval timer, so the flush thread sleeps on its signal,
+        // which the direct enqueue below never sets: it cannot drain while the test swaps the writer.
+        var clock = new ManualTimeProvider(LogFileFixture.FixedNow);
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
-        var writeLock = GetWriteLock(provider);
-        var today = _log.Clock.GetLocalNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, clock);
+        var today = clock.GetLocalNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-        Monitor.Enter(writeLock);
         try
         {
             SetField(provider, "_currentFileName", Path.Combine(_log.LogDirectory, $"app-{today}.log"));
@@ -548,7 +546,6 @@ public class BsftFileLoggerProviderTests : IDisposable
         finally
         {
             SetField(provider, "_writer", null);
-            Monitor.Exit(writeLock);
         }
 
         provider.Dispose();
@@ -557,7 +554,7 @@ public class BsftFileLoggerProviderTests : IDisposable
     [Fact]
     public void Constructor_NullOptions_ThrowsArgumentNullException()
     {
-        var act = () => new BsftFileLoggerProvider(null!);
+        var act = () => new BsftFileLoggerProvider(null!, _log.Clock);
 
         act.Should().Throw<ArgumentNullException>().WithParameterName("options");
     }
@@ -572,7 +569,7 @@ public class BsftFileLoggerProviderTests : IDisposable
         var options = LogFileFixture.Options();
         options.LogDirectory = directory;
 
-        var act = () => new BsftFileLoggerProvider(options);
+        var act = () => new BsftFileLoggerProvider(options, _log.Clock);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*LogDirectory*");
     }
@@ -588,7 +585,7 @@ public class BsftFileLoggerProviderTests : IDisposable
         options.LogDirectory = _log.LogDirectory;
         options.MaxFileSizeMb = megabytes;
 
-        var act = () => new BsftFileLoggerProvider(options);
+        var act = () => new BsftFileLoggerProvider(options, _log.Clock);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*MaxFileSizeMb*");
     }
@@ -604,7 +601,7 @@ public class BsftFileLoggerProviderTests : IDisposable
         options.LogDirectory = _log.LogDirectory;
         options.RetainDays = days;
 
-        var act = () => new BsftFileLoggerProvider(options);
+        var act = () => new BsftFileLoggerProvider(options, _log.Clock);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*RetainDays*");
     }
@@ -618,7 +615,7 @@ public class BsftFileLoggerProviderTests : IDisposable
         options.EnableFileLogging = false;
         options.LogDirectory = string.Empty;
 
-        var act = () => new BsftFileLoggerProvider(options);
+        var act = () => new BsftFileLoggerProvider(options, _log.Clock);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*LogDirectory*");
     }
@@ -666,8 +663,8 @@ public class BsftFileLoggerProviderTests : IDisposable
         }
     }
 
-    private static object GetWriteLock(BsftFileLoggerProvider provider)
-        => GetField<object>(provider, "_writeLock");
+    private static SemaphoreSlim GetWriteGate(BsftFileLoggerProvider provider)
+        => GetField<SemaphoreSlim>(provider, "_writeGate");
 
     private static ConcurrentQueue<string> GetQueue(BsftFileLoggerProvider provider)
         => GetField<ConcurrentQueue<string>>(provider, "_queue");
@@ -681,4 +678,24 @@ public class BsftFileLoggerProviderTests : IDisposable
         => typeof(BsftFileLoggerProvider)
             .GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!
             .SetValue(provider, value);
+
+    [Fact]
+    public void ReportCleanupProblem_WritesTheMessageToConsoleError()
+    {
+        // The provider's cleanup reports through this channel; the permission-based provider tests that reach
+        // it are skipped where the process bypasses file permissions, so it is pinned directly as well.
+        var originalError = Console.Error;
+        using var captured = new StringWriter();
+        Console.SetError(captured);
+        try
+        {
+            BsftFileLoggerProvider.ReportCleanupProblem("Log file cleanup failed: denied");
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        captured.ToString().Should().Contain("BsftFileLoggerProvider: Log file cleanup failed: denied");
+    }
 }

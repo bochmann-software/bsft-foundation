@@ -1,7 +1,9 @@
 using Bsft.Logging.DependencyInjection;
 using Bsft.Logging.LogFiles;
 using Bsft.Logging.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -215,26 +217,27 @@ public class HostLoggingServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public async Task AddBsftFileLogger_ContainerDisposed_DisposesTheProvider()
+    public void AddBsftFileLogger_ContainerDisposed_DisposesTheProvider()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "bsft-logging-" + Guid.NewGuid().ToString("N"));
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         var services = new ServiceCollection();
+        services.AddSingleton<TimeProvider>(clock);
         services.AddLogging(b => b.AddBsftFileLogger(options => options.LogDirectory = tempDir));
 
         try
         {
             var provider = services.BuildServiceProvider();
-            var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger("Shutdown");
+            _ = provider.GetRequiredService<ILoggerFactory>();
+
+            // The file provider arms its flush interval on the injected clock and disposes that timer in
+            // its own Dispose, so a timer that is gone is the observable proof that the container
+            // disposed the provider.
+            clock.PendingTimerCount.Should().Be(1, "the live file provider holds its flush-interval timer");
 
             provider.Dispose();
 
-            // A disposed provider drops what it is handed, so a write that never lands is the
-            // observable proof that the container disposed it. An undisposed provider's flush
-            // thread would pick this up well inside the window below.
-            logger.LogInformation("after-disposal");
-
-            (await ReadLogWithinAsync(tempDir, TimeSpan.FromSeconds(1)))
-                .Should().NotContain("after-disposal", "the container must have disposed the file provider");
+            clock.PendingTimerCount.Should().Be(0, "the container must have disposed the file provider");
         }
         finally
         {
@@ -243,41 +246,34 @@ public class HostLoggingServiceCollectionExtensionsTests
         }
     }
 
-    private static async Task<string> ReadLogWithinAsync(string directory, TimeSpan window)
-    {
-        var deadline = DateTime.UtcNow + window;
-
-        while (DateTime.UtcNow < deadline)
-        {
-            var content = ReadLog(directory);
-            if (content.Contains("after-disposal", StringComparison.Ordinal))
-                return content;
-
-            await Task.Delay(50);
-        }
-
-        return ReadLog(directory);
-    }
-
-    private static string ReadLog(string directory)
-    {
-        if (!Directory.Exists(directory))
-            return string.Empty;
-
-        return string.Concat(Directory.GetFiles(directory, "app-*.log").Select(ReadSharedText));
-    }
-
-    // The provider keeps its writer open, so the file has to be read without demanding exclusivity.
-    private static string ReadSharedText(string path)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-
-        return reader.ReadToEnd();
-    }
-
     private static T GetField<T>(object instance, string name)
         => (T)instance.GetType()
             .GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!
             .GetValue(instance)!;
+
+    /// <summary>
+    /// Pins what the worker template's documentation says: a host's own <c>Logging:LogLevel</c> entry for exactly
+    /// the category the code filters (<c>Microsoft</c>) loses to the code filter, which is added later, while a more
+    /// specific category in the configuration still wins over it.
+    /// </summary>
+    [Fact]
+    public void AddBsftLogging_WithConfiguredLevelsForMicrosoft_KeepsItsFilterForThatCategoryAndYieldsToMoreSpecificOnes()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Logging:LogLevel:Microsoft"] = "Debug",
+                ["Logging:LogLevel:Microsoft.Hosting.Lifetime"] = "Information",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddLogging(logging => logging.AddConfiguration(configuration.GetSection("Logging")));
+        services.AddBsftLogging(options => options.EnableFileLogging = false);
+
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ILoggerFactory>();
+
+        factory.CreateLogger("Microsoft.Something").IsEnabled(LogLevel.Information).Should().BeFalse();
+        factory.CreateLogger("Microsoft.Hosting.Lifetime").IsEnabled(LogLevel.Information).Should().BeTrue();
+    }
 }

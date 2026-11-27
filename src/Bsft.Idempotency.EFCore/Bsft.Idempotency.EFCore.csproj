@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Bsft.Core\Bsft.Core.csproj" />
     <ProjectReference Include="..\Bsft.Idempotency\Bsft.Idempotency.csproj" />
+    <ProjectReference Include="..\Bsft.Hosting.StartGates\Bsft.Hosting.StartGates.csproj" />
   </ItemGroup>
 
   <ItemGroup>

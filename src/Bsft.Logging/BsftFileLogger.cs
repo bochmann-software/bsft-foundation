@@ -62,18 +62,19 @@ internal sealed class BsftFileLogger : ILogger
         string categoryName,
         BsftLoggingOptions options,
         LogScopeChain scopes,
-        TimeProvider? timeProvider = null)
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(categoryName);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(scopes);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         _provider = provider;
         _categoryName = categoryName;
         _categoryShort = GetShortCategory(categoryName);
         _options = options;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _timeProvider = timeProvider;
         _scopes = scopes;
     }
 

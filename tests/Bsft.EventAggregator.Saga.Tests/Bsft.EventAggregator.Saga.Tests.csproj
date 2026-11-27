@@ -1,5 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\ManualTimestampProvider.cs" Link="Shared\ManualTimestampProvider.cs" />
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Bsft.EventAggregator.Saga\Bsft.EventAggregator.Saga.csproj" />
     <ProjectReference Include="..\..\src\Bsft.EventAggregator\Bsft.EventAggregator.csproj" />
   </ItemGroup>

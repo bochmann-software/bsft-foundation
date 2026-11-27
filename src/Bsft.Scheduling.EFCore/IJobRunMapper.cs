@@ -16,4 +16,14 @@ internal interface IJobRunMapper
     /// <param name="entity">The stored row.</param>
     /// <returns>The run the row describes.</returns>
     JobRun ToRun(JobRunEntity entity);
+
+    /// <summary>Reads the result a persisted row carries.</summary>
+    /// <param name="entity">The stored row.</param>
+    /// <returns>The result the job recorded, or <c>null</c> when the row carries none.</returns>
+    JobRunResult? ToResult(JobRunEntity entity);
+
+    /// <summary>Writes a result as the JSON text its column holds.</summary>
+    /// <param name="result">The result, or <c>null</c>.</param>
+    /// <returns>The JSON text, or <c>null</c> when there is no result.</returns>
+    string? ToResultJson(JobRunResult? result);
 }

@@ -4,7 +4,8 @@ The HTTP primitives the framework's endpoints share: strong entity tags built fr
 or a concurrency token, the canonical hash those digests come from, conditional-GET handling on
 `If-None-Match`, the strong `If-Match` comparison a conditional write is gated on, and
 `RequiredPermissionsMetadata`, the one endpoint-metadata record every package that maps routes uses to
-declare the permissions a route stands for.
+declare the permissions a route stands for, and `SameOriginRequest`, the cross-site check of a
+state-changing endpoint a browser application calls with its cookies.
 
 ## Install
 

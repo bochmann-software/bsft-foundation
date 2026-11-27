@@ -12,6 +12,8 @@ internal sealed class RecordingRunOnceService : RunOnceWithRetryBackgroundServic
 {
     private readonly Queue<Func<CancellationToken, Task>> _attempts = new();
 
+    private readonly TaskCompletionSource _firstAttempt = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public RecordingRunOnceService(
         IOptionsMonitor<BsftRunOnceOptions> options,
         TimeProvider timeProvider,
@@ -22,6 +24,9 @@ internal sealed class RecordingRunOnceService : RunOnceWithRetryBackgroundServic
 
     /// <summary>How many attempts have been made.</summary>
     public int AttemptCount { get; private set; }
+
+    /// <summary>Gets a task that completes when the first attempt has been made.</summary>
+    public Task FirstAttempt => _firstAttempt.Task;
 
     /// <summary>Scripts the next attempt to fail with the given exception.</summary>
     /// <param name="failure">What the attempt throws.</param>
@@ -66,6 +71,7 @@ internal sealed class RecordingRunOnceService : RunOnceWithRetryBackgroundServic
     protected override Task RunOnceAsync(CancellationToken ct)
     {
         AttemptCount++;
+        _firstAttempt.TrySetResult();
 
         // An unscripted attempt succeeds, which is what "and then it works" looks like in a test that
         // only cares about how many failures came before it.

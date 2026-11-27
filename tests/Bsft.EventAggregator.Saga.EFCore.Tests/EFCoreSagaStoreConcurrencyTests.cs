@@ -1,5 +1,6 @@
 using Bsft.Core;
 using Bsft.EventAggregator.Saga.EFCore.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +41,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var seed = new SagaInstance<TestSagaState>("OrderSaga", "order-1", new TestSagaState { Paid = false })
         {
@@ -80,7 +81,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var seed = new SagaInstance<TestSagaState>("OrderSaga", "order-or", new TestSagaState { Paid = false })
         {
@@ -120,7 +121,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var seed = new SagaInstance<TestSagaState>("OrderSaga", "order-keep", new TestSagaState()) { CurrentStepIndex = 0 };
         await store.SaveAsync(seed);
@@ -149,7 +150,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var seed = new SagaInstance<TestSagaState>("OrderSaga", "order-5", new TestSagaState()) { CurrentStepIndex = 1 };
         await store.SaveAsync(seed);
@@ -180,7 +181,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         // The winning trigger inserted the saga and its follow-up events have advanced it.
         var committed = new SagaInstance<TestSagaState>("OrderSaga", "order-dup", new TestSagaState { Paid = true })
@@ -214,7 +215,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var seed = new SagaInstance<TestSagaState>("OrderSaga", "order-narrow-ver", new TestSagaState()) { CurrentStepIndex = 0 };
         await store.SaveAsync(seed);
@@ -229,7 +230,7 @@ public class EFCoreSagaStoreConcurrencyTests
         mover!.CurrentStepIndex = 1;
         await store.SaveAsync(mover);
 
-        var narrowStore = new EFCoreSagaStore(new FixedContextScopeFactory(tracking));
+        var narrowStore = new EFCoreSagaStore(new FixedContextScopeFactory(tracking), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         var stale = new SagaInstance<TestSagaState>("OrderSaga", "order-narrow-ver", new TestSagaState { Paid = true })
         {
             CurrentStepIndex = 2,
@@ -248,7 +249,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var instance = new SagaInstance<TestSagaState>("OrderSaga", "order-new", new TestSagaState());
         instance.Version.Should().Be(Guid.Empty, "an unpersisted instance carries the unset sentinel, not null");
@@ -266,7 +267,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var instance = new SagaInstance<TestSagaState>("OrderSaga", "order-2", new TestSagaState { Paid = false });
         await store.SaveAsync(instance);
@@ -294,7 +295,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var instance = new SagaInstance<TestSagaState>("OrderSaga", "order-3", new TestSagaState());
 
@@ -319,7 +320,7 @@ public class EFCoreSagaStoreConcurrencyTests
         using var connection = new SqliteConnection("DataSource=:memory:");
         connection.Open();
         using var provider = BuildProvider(connection);
-        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>());
+        var store = new EFCoreSagaStore(provider.GetRequiredService<IServiceScopeFactory>(), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var seed = new SagaInstance<TestSagaState>("OrderSaga", "order-narrow", new TestSagaState()) { CurrentStepIndex = 0 };
         await store.SaveAsync(seed);
@@ -338,7 +339,7 @@ public class EFCoreSagaStoreConcurrencyTests
         // A store whose scope hands out the stale tracking context. The instance carries the same
         // load-time token the tracked row holds, so the pre-save guard passes and the conflict only
         // surfaces at SaveChangesAsync — the narrow window the EF token closes on the self-committing path.
-        var narrowStore = new EFCoreSagaStore(new FixedContextScopeFactory(tracking));
+        var narrowStore = new EFCoreSagaStore(new FixedContextScopeFactory(tracking), new ManualTimeProvider(DateTimeOffset.UnixEpoch));
         var stale = new SagaInstance<TestSagaState>("OrderSaga", "order-narrow", new TestSagaState { Paid = true })
         {
             CurrentStepIndex = 2,

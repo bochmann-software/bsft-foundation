@@ -3,11 +3,15 @@ using Bsft.Data.Search;
 using Bsft.Data.Filtering;
 using Bsft.Data.Modeling;
 using Bsft.Data.MultiTenancy;
+using Bsft.Data.Transactions;
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Bsft.Data.Diagnostics;
 using Bsft.Instrumentation.DependencyInjection;
@@ -100,6 +104,126 @@ public static class DataServiceCollectionExtensions
         services.TryAddScoped<IUnitOfWork>(sp => sp.GetRequiredService<DbContextUnitOfWork<TContext>>());
         services.TryAddScoped<ITransactionalUnitOfWork>(
             sp => sp.GetRequiredService<DbContextUnitOfWork<TContext>>());
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers one database transaction per scope that spans every <see cref="DbContext"/>
+    /// configured with <see cref="DataDbContextOptionsExtensions.UseBsftSharedTransaction"/>,
+    /// on one connection those contexts share.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="connectionFactory">
+    /// Creates the scope's connection, unopened, for example
+    /// <c>_ =&gt; new NpgsqlConnection(connectionString)</c>. It is called once per scope that needs it,
+    /// and the connection is disposed with the scope.
+    /// </param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// This is the opt-in for a modular host whose modules each own a context over one database: the
+    /// outermost unit opens the transaction, every unit started inside it — a nested
+    /// <c>[Transactional]</c> command, a package typed against <see cref="ITransactionalUnitOfWork"/> —
+    /// joins it, and it commits once. The registration is <see cref="IAmbientTransaction"/>, which the
+    /// mediator's transaction and retry behaviors pick up, plus <see cref="ITransactionalUnitOfWork"/> and
+    /// <see cref="IUnitOfWork"/> over the same instance. A host that does not call this keeps the
+    /// single-context behavior unchanged.
+    /// </para>
+    /// <para>
+    /// Registered with <c>TryAdd</c>; a startup validator fails when
+    /// <see cref="AddBsftDataUnitOfWork{TContext}"/> is registered as well, because that unit would open
+    /// a second transaction on the shared connection. The isolation level is
+    /// <see cref="BsftDataOptions.SharedTransaction"/>; a provider package registers its
+    /// <see cref="ITransactionConflictClassifier"/> beside this. A host that has to see the steps the
+    /// shared transaction runs on the connection outside EF Core registers a scoped
+    /// <see cref="ISharedTransactionStepObserver"/>; without one nothing is reported.
+    /// </para>
+    /// </remarks>
+    public static IServiceCollection AddBsftDataSharedTransaction(
+        this IServiceCollection services,
+        Func<IServiceProvider, DbConnection> connectionFactory)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(connectionFactory);
+
+        services.AddBsftDataModelWarmup();
+        services.TryAddScoped<SharedTransactionEnlistment>();
+        services.TryAddScoped<SharedContextProvider>();
+        services.TryAddScoped<SharedTransactionInterceptor>();
+        services.TryAddScoped<SharedTransactionHealth>();
+        services.TryAddScoped(serviceProvider => new SharedTransactionStepReporter(
+            serviceProvider.GetServices<ISharedTransactionStepObserver>(),
+            serviceProvider.GetService<ILogger<SharedTransactionStepReporter>>()
+                ?? NullLogger<SharedTransactionStepReporter>.Instance));
+        services.TryAddSingleton(serviceProvider => new SharedTransactionRoot(serviceProvider));
+        services.TryAddSingleton(_ => new SharedContextLifetimeListener().Subscribe());
+        services.TryAddScoped(serviceProvider => new SharedTransaction(
+            connectionFactory(serviceProvider),
+            serviceProvider.GetRequiredService<SharedContextProvider>(),
+            serviceProvider.GetRequiredService<IOptions<BsftDataOptions>>(),
+            serviceProvider.GetRequiredService<SharedTransactionHealth>(),
+            serviceProvider.GetRequiredService<SharedTransactionStepReporter>(),
+            serviceProvider.GetService<ILogger<SharedTransaction>>() ?? NullLogger<SharedTransaction>.Instance));
+
+        services.TryAddScoped<IAmbientTransaction>(sp => sp.GetRequiredService<SharedTransaction>());
+        services.TryAddScoped<ITransactionalUnitOfWork>(sp => sp.GetRequiredService<SharedTransaction>());
+        services.TryAddScoped<IUnitOfWork>(sp => sp.GetRequiredService<SharedTransaction>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<Bsft.Core.IStartupValidator>(new SharedTransactionStartupValidator(services)));
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the <see cref="ITimeOrderedIdGenerator"/> that fills the <c>Id</c> of every row of a
+    /// tenant-keyed framework table, with the node id this process uses.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">Sets <see cref="TenantKeyOptions.NodeId"/>, or <see langword="null"/>.</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// The tables themselves are switched in the model, with <c>modelBuilder.UseTenantKeys()</c>
+    /// (<see cref="TenantKeyModelBuilderExtensions.UseTenantKeys"/>), and this call is required with it:
+    /// it says which node id the ids carry and registers the start check that refuses a pooled or
+    /// factory-made tenant-keyed context. A multi-tenancy host whose model uses tenant keys without this
+    /// call fails at start. Without a node id the ids come from
+    /// <see cref="TimeOrderedIdGenerator.ForRandomNode"/>, whose node id is drawn at random per process and
+    /// differs per clock, which is enough for a single process.
+    /// </para>
+    /// <para>
+    /// The generator for a node id is one instance per process and clock
+    /// (<see cref="TimeOrderedIdGenerator.ForNode"/>), so several containers in one process share its
+    /// counter. Its time field is read from the registered <see cref="TimeProvider"/>, which this call
+    /// registers as <see cref="TimeProvider.System"/> when the host has none. The node id is validated
+    /// at start-up.
+    /// </para>
+    /// </remarks>
+    public static IServiceCollection AddBsftDataTenantKeys(
+        this IServiceCollection services, Action<TenantKeyOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<BsftDataOptions>()
+            .Configure(options => configure?.Invoke(options.TenantKeys))
+            .ValidateOnStart();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<BsftDataOptions>, BsftDataOptionsValidator>());
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<ITimeOrderedIdGenerator>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<BsftDataOptions>>().Value.TenantKeys.NodeId is { } nodeId
+                ? TimeOrderedIdGenerator.ForNode(nodeId, serviceProvider.GetRequiredService<TimeProvider>())
+                : TimeOrderedIdGenerator.ForRandomNode(serviceProvider.GetRequiredService<TimeProvider>()));
+        // Registered here only, with the switch: pooled and factory-made contexts are a tenant risk
+        // only under tenant keys, and a host without them must not see a new start check.
+        services.TryAddSingleton<IServiceCollection>(services);
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<Bsft.Core.IStartupValidator, TenantKeyStartupValidator>());
+        // What the multi-tenancy start check looks for: UseTenantKeys without this call is refused.
+        services.TryAddSingleton<TenantKeyRegistration>();
 
         return services;
     }
@@ -219,6 +343,10 @@ public static class DataServiceCollectionExtensions
         services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantContext>());
         services.AddScoped<TenantSaveChangesInterceptor>();
 
+        // The scope a background service opens for one tenant's unit of work. TryAdd, so that a host whose
+        // tenant scopes need more than the tenant (an identity, a database binding) registers its own first.
+        services.TryAddSingleton<Bsft.Core.Tenancy.ITenantScopeFactory, TenantScopeFactory>();
+
         // The validator reads the service collection itself, because pooling is only ever visible as a
         // registration. Holding the collection lets it run after every AddDbContextPool call, whichever
         // order the host wrote them in.
@@ -244,6 +372,11 @@ public static class DataServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<Bsft.Core.IStartupValidator>(
                 new TenantCacheScopeStartupValidator(services)));
+
+        // The other half of the tenant-key switch: a model mapped with UseTenantKeys in a host that never
+        // called AddBsftDataTenantKeys is refused. It does nothing once that call was made.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<Bsft.Core.IStartupValidator, TenantKeyRegistrationStartupValidator>());
 
         config.Apply(services);
 
@@ -283,6 +416,7 @@ public static class DataServiceCollectionExtensions
         // to nothing.
         var searchInterface = typeof(ISearchExecutor<,>).MakeGenericType(entityType, dtoType);
         var searchImpl = typeof(SearchExecutor<,>).MakeGenericType(entityType, dtoType);
+        services.TryAddSingleton(TimeProvider.System);
         services.AddScoped(searchInterface, searchImpl);
     }
 

@@ -113,6 +113,7 @@ public sealed class InMemoryJobStore : IJobStore
 
             stored.Status = status;
             stored.SettledAt = settledAt;
+            stored.Result = run.Result;
             stored.LeaseOwner = null;
             stored.LeaseExpiresAt = null;
             stored.ConcurrencyToken = Guid.NewGuid();

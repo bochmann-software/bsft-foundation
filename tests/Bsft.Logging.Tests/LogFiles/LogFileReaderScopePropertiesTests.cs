@@ -1,3 +1,4 @@
+using Bsft.Tests.Shared;
 using Bsft.Logging.LogFiles;
 using Bsft.Logging.Tests.Support;
 using FluentAssertions;
@@ -133,19 +134,23 @@ public sealed class LogFileReaderScopePropertiesTests : IDisposable
         var options = LogFileFixture.Options();
         options.LogDirectory = _fixture.LogDirectory;
         options.LogReaderPollInterval = TimeSpan.FromMilliseconds(10);
-        var reader = new LogFileReader(options, TimeProvider.System);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var reader = new LogFileReader(options, clock);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var tail = reader.TailAsync(
                 new LogReadRequest { ScopeFilter = new Dictionary<string, string> { ["RunId"] = "mine" } },
                 cancellation.Token)
             .GetAsyncEnumerator(cancellation.Token);
 
         var pending = tail.MoveNextAsync().AsTask();
-        await Task.Delay(50, cancellation.Token);
+
+        // The tail waits out its poll interval on the manual clock once it has taken its starting position.
+        await clock.WaitForTimerAsync(options.LogReaderPollInterval);
         File.AppendAllText(
             Path.Combine(_fixture.LogDirectory, Text),
             "[2026-06-15 11:00:00.000 INF] [-] {RunId=theirs} Category: foreign\n"
             + "[2026-06-15 12:00:00.000 INF] [-] {RunId=mine} Category: appended\n");
+        clock.Advance(options.LogReaderPollInterval);
 
         (await pending).Should().BeTrue();
         tail.Current.Message.Should().Be("appended");

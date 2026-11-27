@@ -4,6 +4,7 @@
     <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
     <Compile Include="..\Shared\RecordingTimeProvider.cs" Link="Shared\RecordingTimeProvider.cs" />
     <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+    <Compile Include="..\Shared\ControllableStartGate.cs" Link="Shared\ControllableStartGate.cs" />
   </ItemGroup>
 
   <ItemGroup>

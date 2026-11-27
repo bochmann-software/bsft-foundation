@@ -192,10 +192,10 @@ public class RabbitMQServiceCollectionExtensionsTests
         var services = CreateServices();
 
         services.AddBsftRabbitMQMessaging(Configure);
-        services.AddBsftRabbitMQMessaging(o => o.ApplicationName = "reporting");
+        services.AddBsftRabbitMQMessaging(o => o.ApplicationName = "documents");
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<RabbitMQTopology>().ExchangeName.Should().Be("reporting.events");
+        provider.GetRequiredService<RabbitMQTopology>().ExchangeName.Should().Be("documents.events");
     }
 
     [Fact]

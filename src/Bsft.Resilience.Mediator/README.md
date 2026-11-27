@@ -40,13 +40,26 @@ validation and audit, which therefore run once per request. Without `UseDefaults
 order is the pipeline order, so call this after `AddBsftMediator`. Apply the marker only to
 idempotent requests — retrying a command with side effects duplicates them.
 
+With the shared transaction of `Bsft.Data` registered, only the outermost unit is retried, as a whole,
+and a failure its provider classifies as a transaction conflict (PostgreSQL `40001`, `40P01`) is
+retried whatever `ShouldRetry` says; a nested `[Retryable]` request passes through, and every attempt after
+the first runs in a fresh scope that the host's `IRequestScopeSeed`s seed. Without the shared transaction
+too, only the outermost request of a scope is retried. See
+[docs/resilience.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/resilience.md#retrying-a-shared-transaction).
+
+Each retry is logged as a structured warning (event `1`, `MediatorRequestRetrying`) with the request
+type, the retry number, the SQLSTATE of the failure that caused it and the exception type, never the
+exception or its message; nothing is logged without registered logging. See
+[docs/resilience.md](https://github.com/bochmann-software/bsft-foundation/blob/main/docs/resilience.md#logging-each-retry).
+
 ## Configure
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `BsftResilienceMediatorOptions.MaxRetryAttempts` | `3` | Retries performed after the initial invocation. |
+| `BsftResilienceMediatorOptions.MaxRetryAttempts` | `3` | Retries performed after the initial invocation, not attempts: `3` runs a request at most four times. At least `1`. |
 | `BsftResilienceMediatorOptions.BaseDelay` | `200ms` | Base delay between retries; grows exponentially and is randomized with jitter. |
-| `BsftResilienceMediatorOptions.ShouldRetry` | `IsTransientFailure` | Decides which exception is transient. The default retries everything except cancellation and the deterministic `Bsft.Core` domain exceptions (validation, business rule, not found, forbidden, conflict). |
+| `BsftResilienceMediatorOptions.ShouldRetry` | `IsTransientFailure` | Decides which exception is transient. The default retries everything except cancellation, the deterministic `Bsft.Core` domain exceptions (validation, business rule, not found, forbidden, conflict) and `AmbientTransactionMisuseException`. A conflict the shared transaction's classifier reports is retried regardless, a misuse that is no conflict never; that classifier is the intended source for database transients. |
+| `BsftResilienceMediatorOptions.ShouldRetryAllCommands` | `false` | Retries every command as if it carried `[Retryable]`; queries still need the marker. Outermost-only. A startup validator requires `ApplyTransactionToAllCommands()` and a registered `IAmbientTransaction`. |
 
 Validation: a negative retry count, a negative delay and a null predicate are rejected at
 registration and again on `ValidateOnStart`, each naming the member and the offending value.

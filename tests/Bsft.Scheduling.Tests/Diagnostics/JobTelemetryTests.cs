@@ -4,6 +4,7 @@ using Bsft.Instrumentation;
 using Bsft.Instrumentation.DependencyInjection;
 using Bsft.Scheduling.Diagnostics;
 using Bsft.Scheduling.Tests.Fakes;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -13,6 +14,7 @@ namespace Bsft.Scheduling.Tests.Diagnostics;
 public class JobTelemetryTests
 {
     private readonly IInstrumentationSourceProvider _sources;
+    private readonly ManualTimestampProvider _clock = new();
 
     public JobTelemetryTests()
     {
@@ -21,7 +23,7 @@ public class JobTelemetryTests
         _sources = services.BuildServiceProvider().GetRequiredService<IInstrumentationSourceProvider>();
     }
 
-    private JobTelemetry CreateTelemetry() => new(_sources);
+    private JobTelemetry CreateTelemetry() => new(_sources, _clock);
 
     [Fact]
     public void EmittingIsANoOpWhileNobodyIsListening()
@@ -142,6 +144,37 @@ public class JobTelemetryTests
     }
 
     [Fact]
+    public void TheExecutionDurationIsMeasuredOnTheInjectedClock()
+    {
+        const string JobName = "clocked-report";
+        var durations = new List<double>();
+
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == JobTelemetry.SourceName && instrument.Name == "bsft.job.execution.duration")
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "job.name" && Equals(tag.Value, JobName))
+                    durations.Add(value);
+            }
+        });
+        listener.Start();
+
+        using (var scope = CreateTelemetry().BeginExecution(JobName, 1, 1))
+        {
+            _clock.Advance(TimeSpan.FromSeconds(3));
+            scope.Succeeded();
+        }
+
+        durations.Should().Equal(3d);
+    }
+
+    [Fact]
     public void DisposingAScopeTwiceRecordsOnlyOneMeasurement()
     {
         using var listener = CreateActivityListener(out var activities);
@@ -155,10 +188,12 @@ public class JobTelemetryTests
     }
 
     [Fact]
-    public void TheConstructorRejectsAMissingSourceProvider()
+    public void TheConstructorRejectsAMissingSourceProviderOrClock()
     {
-        ((Action)(() => new JobTelemetry(null!)))
+        ((Action)(() => new JobTelemetry(null!, _clock)))
             .Should().Throw<ArgumentNullException>().WithParameterName("sources");
+        ((Action)(() => new JobTelemetry(_sources, null!)))
+            .Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
     }
 
     [Fact]
@@ -166,9 +201,11 @@ public class JobTelemetryTests
     {
         var telemetry = CreateTelemetry();
 
-        ((Action)(() => new JobExecutionTelemetryScope(null!, null, "report")))
+        ((Action)(() => new JobExecutionTelemetryScope(null!, _clock, null, "report")))
             .Should().Throw<ArgumentNullException>().WithParameterName("telemetry");
-        ((Action)(() => new JobExecutionTelemetryScope(telemetry, null, null!)))
+        ((Action)(() => new JobExecutionTelemetryScope(telemetry, null!, null, "report")))
+            .Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
+        ((Action)(() => new JobExecutionTelemetryScope(telemetry, _clock, null, null!)))
             .Should().Throw<ArgumentNullException>().WithParameterName("jobName");
     }
 

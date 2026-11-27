@@ -6,6 +6,7 @@ using Bsft.EventAggregator.Saga.Tests.Support;
 using Bsft.EventAggregator.Saga.Timeouts;
 using Bsft.Instrumentation;
 using Bsft.Instrumentation.DependencyInjection;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -276,6 +277,32 @@ public class SagaTimeoutDispatcherTests
         await loop;
 
         store.Calls.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task RunLoop_WaitsThePollIntervalOnTheInjectedClock()
+    {
+        // The wait after an empty or failed pass is measured by the dispatcher's TimeProvider: the
+        // next poll comes when that clock has moved by the interval, and not a tick before.
+        var interval = TimeSpan.FromMinutes(1);
+        _options.PollInterval = interval;
+        var clock = new ManualTimeProvider(_now);
+        var store = new ForeignCancelingTimeoutStore();
+        var dispatcher = new SagaTimeoutDispatcher(
+            store, _publisher, clock, Options.Create(_root), _telemetry, NullLogger<SagaTimeoutDispatcher>.Instance);
+
+        using var cts = new CancellationTokenSource();
+        var loop = dispatcher.RunLoopAsync(cts.Token);
+
+        await clock.WaitForTimerAsync(interval);
+        clock.Advance(interval - TimeSpan.FromTicks(1));
+        store.PolledAgain.Task.IsCompleted.Should().BeFalse();
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        await store.PolledAgain.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await cts.CancelAsync();
+        await loop.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     [Fact]

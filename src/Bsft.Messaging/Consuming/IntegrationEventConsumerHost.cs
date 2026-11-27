@@ -28,6 +28,7 @@ public sealed class IntegrationEventConsumerHost : BackgroundService
     private readonly IMessageSource _source;
     private readonly IIntegrationEventConsumer _consumer;
     private readonly ConsumerOptions _options;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<IntegrationEventConsumerHost> _logger;
 
     /// <summary>
@@ -36,6 +37,7 @@ public sealed class IntegrationEventConsumerHost : BackgroundService
     /// <param name="source">The transport's receiving seam.</param>
     /// <param name="consumer">The consumer handling one delivery at a time.</param>
     /// <param name="options">The messaging options carrying the consumer group.</param>
+    /// <param name="timeProvider">The clock the restart delay runs on.</param>
     /// <param name="logger">Logger used to report stream failures.</param>
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     /// <exception cref="ArgumentException">Thrown when the consumer name is absent.</exception>
@@ -48,11 +50,13 @@ public sealed class IntegrationEventConsumerHost : BackgroundService
         IMessageSource source,
         IIntegrationEventConsumer consumer,
         IOptions<BsftMessagingOptions> options,
+        TimeProvider timeProvider,
         ILogger<IntegrationEventConsumerHost> logger)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _consumer = consumer ?? throw new ArgumentNullException(nameof(consumer));
         _options = Validate((options ?? throw new ArgumentNullException(nameof(options))).Value.Consumer);
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -137,7 +141,7 @@ public sealed class IntegrationEventConsumerHost : BackgroundService
                 if (subscription.IsFaulted)
                 {
                     _logger.LogError(subscription.Exception!.Flatten(), "The integration event message source failed.");
-                    await Task.Delay(_options.ReceiveRestartDelay, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_options.ReceiveRestartDelay, _timeProvider, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -149,7 +153,7 @@ public sealed class IntegrationEventConsumerHost : BackgroundService
                 {
                     _logger.LogError(
                         "The integration event message source was canceled although the consumer was not asked to stop.");
-                    await Task.Delay(_options.ReceiveRestartDelay, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_options.ReceiveRestartDelay, _timeProvider, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -157,7 +161,7 @@ public sealed class IntegrationEventConsumerHost : BackgroundService
                 // allowed to do — it is how a transport signals that it wants to be re-subscribed to.
                 await subscription.ConfigureAwait(false);
 
-                await Task.Delay(_options.ReceiveRestartDelay, stoppingToken).ConfigureAwait(false);
+                await Task.Delay(_options.ReceiveRestartDelay, _timeProvider, stoppingToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

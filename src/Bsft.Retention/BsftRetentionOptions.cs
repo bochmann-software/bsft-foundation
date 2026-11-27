@@ -16,26 +16,60 @@ public sealed class BsftRetentionOptions
     /// <summary>The configuration section the per-pass sections sit under.</summary>
     public const string SectionName = "Bsft:Retention";
 
+    private const int DefaultBatchSize = 500;
+    private const int DefaultMaxBatchesPerSweep = 100;
+
     /// <summary>
     /// The name the options of <typeparamref name="TPass"/> are registered under, which is also the
     /// per-pass configuration section under <see cref="SectionName"/> and the seed of its startup
     /// stagger.
     /// </summary>
     /// <typeparam name="TPass">The retention pass.</typeparam>
-    /// <returns>The pass type's full name, or its short name where the runtime gives no full one.</returns>
+    /// <returns>
+    /// The pass type's full name, or its short name where the runtime gives no full one. A constructed
+    /// generic pass is written the way C# writes it, <c>Namespace.Pass&lt;Namespace.Argument&gt;</c>.
+    /// </returns>
     /// <remarks>
+    /// <para>
     /// Public because two callers outside the sweeper need the same answer: a host writing the
     /// per-pass configuration section, and a package that binds its own options onto the pass it
     /// ships. Deriving it by hand in either place would be a string that silently stops matching when
     /// the type moves.
+    /// </para>
+    /// <para>
+    /// The runtime's full name of a constructed generic type carries the assembly-qualified name of
+    /// every type argument, version included, which is neither a configuration key a host can write
+    /// nor a stagger seed that survives the next release. The C# form names the same type without
+    /// either problem.
+    /// </para>
     /// </remarks>
     public static string NameFor<TPass>()
         where TPass : class, IRetentionPass
-        => typeof(TPass).FullName ?? typeof(TPass).Name;
+    {
+        return Name(typeof(TPass));
+
+        // Recursive because a type argument may itself be a constructed generic type.
+        static string Name(Type type)
+        {
+            if (!type.IsConstructedGenericType)
+                return type.FullName ?? type.Name;
+
+            var definition = type.GetGenericTypeDefinition();
+            var segments = (definition.FullName ?? definition.Name).Split('`');
+
+            // Every segment after the first opens with the arity the runtime appended to a generic
+            // name ("Outer`1+Inner`2"); the C# form carries the arguments instead, so the digits go.
+            var name = string.Concat(segments.Select((segment, index) =>
+                index == 0 ? segment : string.Concat(segment.SkipWhile(char.IsAsciiDigit))));
+
+            return $"{name}<{string.Join(",", type.GenericTypeArguments.Select(Name))}>";
+        }
+    }
 
     /// <summary>
     /// Gets or sets how long a record is kept before it may be purged. Defaults to <c>null</c>, which
-    /// keeps every record indefinitely and runs no sweep at all.
+    /// keeps every record indefinitely and runs no sweep at all. Not used when
+    /// <see cref="UseAbsoluteExpiry"/> is set.
     /// </summary>
     /// <remarks>
     /// Null rather than a default window on purpose: deleting an application's history is a decision
@@ -44,13 +78,35 @@ public sealed class BsftRetentionOptions
     /// </remarks>
     public TimeSpan? RetentionPeriod { get; set; }
 
+    /// <summary>
+    /// Gets or sets whether the pass purges records that carry their own absolute expiry instant
+    /// instead of records older than <see cref="RetentionPeriod"/>. Defaults to <c>false</c>, the age
+    /// mode.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// In absolute-expiry mode the cutoff handed to <see cref="IRetentionPass.PurgeBatchAsync"/> is
+    /// the current time of the <see cref="TimeProvider"/>, read again <em>for every batch</em>, and a
+    /// record is expired when its expiry is at or before it (<c>ExpiresAt &lt;= cutoff</c>), which
+    /// differs from the age mode's strictly-older rule. <see cref="RetentionPeriod"/> is not used:
+    /// it may be left unset, and the pass is swept every <see cref="SweepInterval"/> regardless.
+    /// </para>
+    /// <para>
+    /// The age mode computes its cutoff once per sweep. A flag on the options rather than a second
+    /// pass contract, because the batch signature is identical and only the meaning of the cutoff
+    /// changes, so every existing <see cref="IRetentionPass"/> and the disk-watermark policy keep
+    /// working unmodified.
+    /// </para>
+    /// </remarks>
+    public bool UseAbsoluteExpiry { get; set; }
+
     /// <summary>Gets or sets the most records deleted per batch. Defaults to 500.</summary>
     /// <remarks>
     /// The cap is what keeps a first sweep against a large backlog from turning into a single
     /// long-locking transaction, and it is also the signal the sweep reads: a full batch means more
     /// is waiting, a short one means the backlog is drained.
     /// </remarks>
-    public int BatchSize { get; set; } = 500;
+    public int BatchSize { get; set; } = DefaultBatchSize;
 
     /// <summary>
     /// Gets or sets how long the sweep pauses between two batches. Defaults to zero, which drains as
@@ -98,5 +154,5 @@ public sealed class BsftRetentionOptions
     /// pass indefinitely. Hitting the bound is not an error: the sweep reports that work remains and
     /// the next one continues where it left off.
     /// </remarks>
-    public int MaxBatchesPerSweep { get; set; } = 100;
+    public int MaxBatchesPerSweep { get; set; } = DefaultMaxBatchesPerSweep;
 }

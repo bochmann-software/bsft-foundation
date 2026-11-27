@@ -34,6 +34,54 @@ public sealed class NightlyReportJob : IRecurringJob
 A job is resolved from a **fresh dependency injection scope for every execution**, so it may take
 scoped dependencies such as a `DbContext` through its constructor.
 
+## Run results
+
+A job may report what its run achieved, such as how many items it processed and how many failed, by
+recording a result on the context. The result is stored with the run and returned by the run listing
+of `Bsft.Scheduling.Http`, so an operator console shows a run history with the job's own figures beside
+the status.
+
+```csharp
+public sealed class MailDispatchJob : IRecurringJob
+{
+    public JobSchedule Schedule => JobSchedule.Every(TimeSpan.FromMinutes(10));
+
+    public async Task ExecuteAsync(JobExecutionContext context, CancellationToken cancellationToken = default)
+    {
+        var (sent, failed) = await DispatchPendingAsync(cancellationToken);
+
+        context.ResultRecorder.Record("mail-dispatch/v1", new { Sent = sent, Failed = failed });
+    }
+}
+```
+
+`Record<TResult>(schema, result)` serializes the value as JSON with the web defaults (camelCase) and
+stores it as a `JobRunResult`: the schema name and the JSON. The schema is a name the job owns, at most
+200 characters; it is what tells a reader how to read the value, so a change to the value's shape is a
+reason to change it (`mail-dispatch/v2`). The rules:
+
+- **Optional.** A job that records nothing settles exactly as before, with no result on the run, and
+  its row in the listing carries no `result` property.
+- **Last call wins.** A job may record as it goes; the run keeps the latest value, so a job that fails
+  after recording still settles with what it had counted.
+- **The settling attempt's result is stored.** The result is written when the run settles, completed or
+  failed for good. An attempt that fails and is retried leaves nothing behind.
+- **Bounded.** `BsftSchedulingOptions.MaxResultBytes` (default 4096 UTF-8 bytes of JSON, at most 64 KiB)
+  bounds the value. A larger one is refused in the job's own call with `Bsft.Core.PayloadTooLargeException`
+  carrying `SchedulingErrorCodes.ResultTooLarge` (`SCHEDULING_RESULT_TOO_LARGE`); nothing is recorded, an
+  earlier result is kept, and the run is affected only if the job lets the exception escape, in which
+  case the attempt fails like any other.
+- **Metadata, not content.** The listing returns results under the metadata permission
+  (`scheduling.read`), so a result carries counts, sizes and identifiers of the job's own making, never
+  the data it worked on (package-conventions section 5a). The value is not inspected and the listing
+  is not audited; a host sets `BsftSchedulingHttpOptions.IncludeResultsInListing` to `false` to keep
+  results to the audited single-run route.
+
+A context built by hand, as in a unit test of a job, carries a recorder that throws
+`InvalidOperationException` rather than silently discarding: set `ResultRecorder` with `with { ... }`
+or in the initializer to a recorder of the test's own. A store of the host's own keeps the result by
+persisting `JobRun.Result` in `SettleAsync`; one that ignores it settles runs as before, without results.
+
 ## Registration
 
 ```csharp
@@ -54,6 +102,58 @@ builder.Services.AddBsftRecurringJob<CleanupJob>(JobSchedule.Every(TimeSpan.From
 builder.Services.AddBsftJob<SendInvoiceJob>("send-invoice");                    // enqueued explicitly
 builder.Services.AddBsftSchedulingCorrelation();                                // from .Correlation
 ```
+
+### Producer-only hosts
+
+In a split deployment an API enqueues and a worker executes, both against the same run table. Register
+the API with `AddBsftSchedulingProducer()` instead of `AddBsftScheduling()`:
+
+```csharp
+// API host: enqueues and schedules, never executes
+builder.Services.AddBsftSchedulingProducer(builder.Configuration);
+builder.Services.AddBsftSchedulingEFCore<AppDbContext>();
+builder.Services.AddBsftStoredSchedulesEFCore<AppDbContext>();
+builder.Services.AddBsftJob<SendInvoiceJob>("send-invoice");   // so the name resolves; never run here
+
+// Worker host: claims and executes
+builder.Services.AddBsftScheduling(builder.Configuration);
+builder.Services.AddBsftSchedulingEFCore<AppDbContext>();
+builder.Services.AddBsftStoredSchedulesEFCore<AppDbContext>();
+builder.Services.AddBsftJob<SendInvoiceJob>("send-invoice");
+builder.Services.AddBsftSchedulingHealthCheck();               // worker only
+```
+
+**Both hosts must share both stores.** `AddBsftSchedulingEFCore` shares the run table;
+`AddBsftStoredSchedulesEFCore` shares the stored-schedule catalog. A producer left on the in-memory
+catalog keeps the schedules created through `IStoredScheduleService` in its own process, so the
+worker never sees them, and nothing reports it (the same holds for the in-memory run store). The
+framework does not warn at start-up: the EF registrations replace the defaults after the fact and a
+single-process demo legitimately runs on the in-memory ones.
+
+`AddBsftSchedulingHealthCheck` belongs on the worker. Its heartbeats fill only where runs execute, so
+on a producer it would report every recurring job as late.
+
+The producer registers `IJobScheduler`, the store, the registry and the supporting services, and adds
+no hosted service: no dispatcher, no recurring or stored-schedule seeder. It therefore never claims a
+run. This matters because a host that claims a run whose job it has not registered settles the run as
+`Failed` (`JobRunOutcomePolicy.RecordUnregisteredAsync`), which would break the worker's runs. It takes
+the same options overloads as `AddBsftScheduling` (a delegate, or the `Bsft:Scheduling` section and a
+delegate), validated the same way. Register the jobs the host enqueues with `AddBsftJob` or
+`AddBsftRecurringJob`, because the scheduler checks a name against the registry; the producer never
+executes them. Recurring jobs are seeded by the worker, so the producer's registration of one is only
+what lets it enqueue an extra occurrence.
+
+This mirrors `AddBsftJobs` and `AddBsftJobsWorker` in `Bsft.Jobs`, with one difference: `AddBsftScheduling`
+keeps meaning the full host (it also dispatches), so the producer is the added entry point rather than
+the base one. A separate entry point was chosen over an option on `AddBsftScheduling` because the role
+is visible at the call site, there is no boolean to forget, and the existing call is untouched.
+
+The configuration overload binds `Bsft:Scheduling:Jobs:<job name>` exactly as the full one does.
+
+Registering both calls in one container is allowed in either order and is idempotent: the full
+registration wins, and the registered services and hosted services equal those of `AddBsftScheduling`
+alone. The options delegates of both calls accumulate and run in call order, so the later call wins for
+a value both set.
 
 Without `AddBsftSchedulingEFCore` the scheduler keeps its in-memory store. That store loses everything
 when the process ends, so a job delayed until tomorrow never fires after a restart — it is for tests
@@ -88,6 +188,25 @@ the unique pending-occurrence index and with it the single-occurrence guarantee.
 `EFCoreJobStore` and the mapper are internal, because a host that wants different persistence writes
 its own `IJobStore` against the core package rather than subclassing this one.
 
+Nothing deletes a settled run unless a host says so twice. A run that completes, fails or is skipped is
+updated in place, so a scheduler with a few jobs on a ten second cadence grows `JobRuns` without bound, on
+the table the dispatcher polls. `AddBsftJobRunEFCoreRetention()` registers `JobRunRetentionPass` and the
+framework's retention sweeper over it, and a window on `BsftSchedulingOptions.JobRunRetention` is what sets
+it going: completed, failed and skipped runs that settled longer ago than that are deleted, oldest first,
+in batches the sweeper bounds and paces. Both are needed because a settled run is the record an operator
+reads to find out what ran and why it failed, and deleting it is not reversible. A pending or running run
+is never touched, however old. `BsftSchedulingOptions.JobRunRetentionKeepLatest` (default `0`) spares the
+latest N settled runs of each job whatever their age, so a job that rarely runs still shows its last
+outcomes; it also keeps the job visible to anything that reads its last settled run. Both options are
+validated at start (the window positive where set, the count not negative). The pass holds only the delete;
+the batch size, the pacing and the startup offset are `BsftRetentionOptions` under the pass's name, the same
+as every other retention in the framework. The pass ships no index, because
+the package ships no migration: with `JobRunRetentionKeepLatest` at `0` the sweep is paced and rare, while an
+index on the settle instant would be written on every settle. With keep-latest on, the pass reads the jobs
+that have expired runs and then one boundary per job (that job's Nth newest settled run), which is a
+descending read of the job's settled runs; a host with millions of settled rows adds an index on
+`(JobName, SettledAt, Id)` in its own migration to turn that read into a seek.
+
 ### Bsft.Scheduling.Http
 
 The operator read surface over the run table. `AddBsftSchedulingHttp()` registers the options and the
@@ -116,6 +235,9 @@ records nothing so nobody fills the audit log by walking identifiers.
 It is a separate package because `Bsft.Scheduling` is what a worker running jobs references, and a
 worker has no business carrying the ASP.NET Core stack. The in-memory store ships no reader on purpose:
 a question about what failed last night is a question about runs that outlive the process.
+
+Each listed run carries the result its job recorded, if any (see [Run results](#run-results)), as
+`result: { "schema": ..., "value": ... }` with the value as JSON rather than as an escaped string.
 
 What the surface cannot answer follows from the table rather than from the routes. There is no tenant
 column, so the database is the scope; there is no start instant, so runs are ordered by when they were
@@ -240,8 +362,8 @@ down every host that also calls `AddHealthChecks()`.
 Purging expired rows moved out of this package in 1.3.34. It was never a job — a sweep is not leased,
 because a delete does not need to happen exactly once — and a package that only wanted the loop was
 taking a job store, a dispatcher and a health check with it. `IRetentionPass`, `RetentionSweeper<T>`
-and `AddBsftRetention<TPass>` now live in `Bsft.Retention`, whose only framework reference is
-`Bsft.Core`. See [retention.md](retention.md).
+and `AddBsftRetention<TPass>` now live in `Bsft.Retention`, whose only framework references are
+`Bsft.Core` and `Bsft.Hosting.StartGates`. See [retention.md](retention.md).
 
 ## Delayed and one-shot jobs
 
@@ -383,6 +505,11 @@ migration:
 protected override void OnModelCreating(ModelBuilder modelBuilder) =>
     modelBuilder.ApplyConfiguration(new JobRunEntityConfiguration());
 ```
+
+Run results live in two nullable columns of `JobRuns`: `ResultSchema` (up to 200 characters) and
+`Result` (the JSON text, unbounded in the schema because `MaxResultBytes` bounds it where it is
+recorded). A host upgrading from a version without them adds both to its next migration; rows written
+before have no result and list as before.
 
 The default index filters use SQL Server / SQLite identifier quoting. Another provider has to pass
 its own predicate — PostgreSQL, for instance, needs `"IsRecurring" = true AND "Status" = 0`. Passing

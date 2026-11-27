@@ -133,7 +133,8 @@ The wire format is the polymorphic AST, discriminated by `$type`:
 | `or` | `{ "$type": "or", "or": [ <node>, … ] }` | any child node holds |
 
 `op` is one of `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `!contains`, `startsWith`,
-`!startsWith`, `endsWith`, `!endsWith`. Presence (`pr`) is not an `op` on a `comparison`; because it
+`!startsWith`, `endsWith`, `!endsWith`, `in` (a non-empty JSON array without `null`, by default at most 100
+values; only on a field that names it, see [data.md](data.md#set-membership-in)). Presence (`pr`) is not an `op` on a `comparison`; because it
 compares against nothing it is its own unary `present` node, so a comparison's `value` never has to be
 faked. A minimal example, before url-encoding:
 
@@ -180,6 +181,7 @@ must obey, so the vocabulary borrows deliberately:
 | `endsWith` | `ew` | suffix match | string field only |
 | `!endsWith` | (negated `ew`) | not a suffix | string field only |
 | `present` node | `pr` | field has a value (not null) | any field |
+| `in` | (none; an `or` over `eq`) | equals one of a non-empty array of non-null values | field that names `in` |
 | `and` / `or` node | `and` / `or` | logical combination | — |
 
 SCIM's `not` has no dedicated node: single-condition negation is expressed by the negated operators

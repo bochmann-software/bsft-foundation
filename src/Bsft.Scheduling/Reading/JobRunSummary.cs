@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Bsft.Scheduling.Reading;
 
 /// <summary>
@@ -7,6 +9,11 @@ namespace Bsft.Scheduling.Reading;
 /// It carries no payload. The arguments a run was enqueued with are whatever the enqueuing feature put
 /// in them, so they are graded apart per section 5a of the package conventions and belong to
 /// <see cref="JobRunView"/>.
+/// <para>
+/// It does carry the <see cref="Result"/> a job recorded. That is not a payload: it is a summary the
+/// job wrote about its own run, metadata by contract (see <see cref="JobRunResult"/>), and it is what a
+/// run history needs beside the status.
+/// </para>
 /// <para>
 /// There is no failure description here because the table stores none: a run that failed is recorded
 /// as failed, and why it failed is in the logs and the telemetry of the instance that ran it.
@@ -32,4 +39,15 @@ public sealed record JobRunSummary(
     int AttemptCount,
     string? LeaseOwner,
     DateTimeOffset? LeaseExpiresAt,
-    DateTimeOffset? SettledAt);
+    DateTimeOffset? SettledAt)
+{
+    /// <summary>
+    /// Gets what the job reported about the run, or <see langword="null"/> when it reported nothing.
+    /// </summary>
+    /// <remarks>
+    /// Left out of the JSON when absent, so a run without a result reads exactly as it did before
+    /// results existed.
+    /// </remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JobRunResult? Result { get; init; }
+}

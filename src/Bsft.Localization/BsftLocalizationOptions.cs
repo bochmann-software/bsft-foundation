@@ -48,6 +48,38 @@ public sealed class BsftLocalizationOptions
     public int MaxFilterModuleNameLength { get; set; } = 64;
 
     /// <summary>
+    /// Gets or sets the greatest length of a key the culture-explicit lookup accepts. Defaults to 256 characters.
+    /// </summary>
+    /// <remarks>
+    /// Keys reach the lookup from callers that do not control them, such as the authors of templates, and
+    /// a key is held in the hit and miss caches and sent to the store. A longer key is refused with an
+    /// <see cref="ArgumentException"/> before any of them is touched, so the host rather than the caller
+    /// decides how much one key costs. Read once, when the lookup is built.
+    /// </remarks>
+    public int MaxKeyLength { get; set; } = LocalizationDefaults.MaxKeyLength;
+
+    /// <summary>
+    /// Gets or sets how many misses the culture-explicit lookup remembers at once. Defaults to 10 000.
+    /// </summary>
+    /// <remarks>
+    /// A miss is a key no level of the chain has. Remembering it keeps a template that names a missing
+    /// text from costing a store read per render. The bound is on live entries: once the cache is full
+    /// of them, a further miss is simply not remembered and is read again next time. Read once, when
+    /// the lookup is built.
+    /// </remarks>
+    public int MissCacheMaxEntries { get; set; } = LocalizationDefaults.MissCacheMaxEntries;
+
+    /// <summary>
+    /// Gets or sets how long the culture-explicit lookup remembers a miss. Defaults to 30 seconds.
+    /// </summary>
+    /// <remarks>
+    /// Short, because seeding does not invalidate anything: a key added after it was missed shows up
+    /// within this time. Read once, when the lookup is built.
+    /// </remarks>
+    public TimeSpan MissCacheLifetime { get; set; } =
+        TimeSpan.FromSeconds(LocalizationDefaults.MissCacheLifetimeSeconds);
+
+    /// <summary>
     /// Validates the options.
     /// </summary>
     /// <exception cref="InvalidOperationException">Thrown when a value cannot be used.</exception>
@@ -78,6 +110,21 @@ public sealed class BsftLocalizationOptions
         {
             throw new InvalidOperationException(
                 $"{nameof(MaxFilterModuleNameLength)} must be positive, but it is {MaxFilterModuleNameLength}.");
+        }
+
+        if (MaxKeyLength <= 0)
+            throw new InvalidOperationException($"{nameof(MaxKeyLength)} must be positive, but it is {MaxKeyLength}.");
+
+        if (MissCacheMaxEntries <= 0)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(MissCacheMaxEntries)} must be positive, but it is {MissCacheMaxEntries}.");
+        }
+
+        if (MissCacheLifetime <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(MissCacheLifetime)} must be positive, but it is {MissCacheLifetime}.");
         }
     }
 }

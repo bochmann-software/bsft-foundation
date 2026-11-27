@@ -29,6 +29,7 @@ internal static class JobRunExtensions
         LeaseOwner = run.LeaseOwner,
         LeaseExpiresAt = run.LeaseExpiresAt,
         SettledAt = run.SettledAt,
+        Result = run.Result,
         ConcurrencyToken = run.ConcurrencyToken,
     };
 }

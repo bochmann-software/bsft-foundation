@@ -58,6 +58,14 @@ internal sealed class BsftSchedulingOptionsValidator : IValidateOptions<BsftSche
         if (string.IsNullOrWhiteSpace(options.InstanceId))
             failures.Add($"{nameof(BsftSchedulingOptions.InstanceId)} must not be empty.");
 
+        AddStoredScheduleFailures(options, failures);
+        AddResultAndRetentionFailures(options, failures);
+
+        return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    }
+
+    private static void AddStoredScheduleFailures(BsftSchedulingOptions options, List<string> failures)
+    {
         // Zero would turn the stored-schedule seed into a tight loop hammering the store with the same
         // check RecurringSeedInterval guards against for the code-registered catalog.
         if (options.StoredScheduleSeedInterval <= TimeSpan.Zero)
@@ -73,7 +81,30 @@ internal sealed class BsftSchedulingOptionsValidator : IValidateOptions<BsftSche
             failures.Add(
                 $"{nameof(BsftSchedulingOptions.StoredScheduleBatchSize)} must be at least 1, but it is {options.StoredScheduleBatchSize}.");
         }
+    }
 
-        return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    private static void AddResultAndRetentionFailures(BsftSchedulingOptions options, List<string> failures)
+    {
+        // A non-positive bound refuses every result, and one beyond the ceiling lets a single page of
+        // the listing carry megabytes per row.
+        if (options.MaxResultBytes is < 1 or > BsftSchedulingOptions.MaxResultBytesCeiling)
+        {
+            failures.Add(
+                $"{nameof(BsftSchedulingOptions.MaxResultBytes)} must be between 1 and {BsftSchedulingOptions.MaxResultBytesCeiling}, but it is {options.MaxResultBytes}.");
+        }
+
+        // Set and not positive means every sweep deletes the run a job settled a moment ago, taking the
+        // record of it along. Unset is the default and means nothing is deleted.
+        if (options.JobRunRetention is { } retention && retention <= TimeSpan.Zero)
+        {
+            failures.Add(
+                $"{nameof(BsftSchedulingOptions.JobRunRetention)} must be positive when it is set, but it is {retention}.");
+        }
+
+        if (options.JobRunRetentionKeepLatest < 0)
+        {
+            failures.Add(
+                $"{nameof(BsftSchedulingOptions.JobRunRetentionKeepLatest)} must not be negative, but it is {options.JobRunRetentionKeepLatest}.");
+        }
     }
 }

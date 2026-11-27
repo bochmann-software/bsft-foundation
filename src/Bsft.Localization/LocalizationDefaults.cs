@@ -15,4 +15,19 @@ public static class LocalizationDefaults
     /// when the requested locale has no match.
     /// </summary>
     public const string Locale = "en";
+
+    /// <summary>
+    /// The default longest key, in characters, the culture-explicit lookup accepts: 256.
+    /// </summary>
+    public const int MaxKeyLength = 256;
+
+    /// <summary>
+    /// The default number of misses the culture-explicit lookup remembers at once: 10 000.
+    /// </summary>
+    public const int MissCacheMaxEntries = 10_000;
+
+    /// <summary>
+    /// The default time, in seconds, the culture-explicit lookup remembers a miss: 30.
+    /// </summary>
+    public const int MissCacheLifetimeSeconds = 30;
 }

@@ -4,11 +4,13 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using System.Linq;
 using System.Net;
@@ -49,8 +51,8 @@ public class BsftExceptionMiddlewareTests
 
     /// <summary>
     /// A host whose pipeline runs endpoint routing ahead of the middleware, so
-    /// <see cref="HttpContext.GetEndpoint"/> (and its metadata) is populated the way bsft-tower's
-    /// consumer relies on it being: a <c>CustomizeProblemDetails</c> keyed on endpoint metadata needs the
+    /// <see cref="HttpContext.GetEndpoint"/> (and its metadata) is populated the way a consuming
+    /// application relies on it being: a <c>CustomizeProblemDetails</c> keyed on endpoint metadata needs the
     /// endpoint to be resolved before the middleware's <see cref="ProblemDetailsContext.HttpContext"/>
     /// is built.
     /// </summary>
@@ -783,7 +785,7 @@ public class BsftExceptionMiddlewareTests
     [Fact]
     public async Task InvokeAsync_MappedException_EndpointMetadataIsReachableFromCustomizeProblemDetails()
     {
-        // bsft-tower keys its CustomizeProblemDetails on the endpoint's own metadata (replacing a
+        // A consuming application keys its CustomizeProblemDetails on the endpoint's own metadata (replacing a
         // body-rewriting middleware with a customisation that only fires for endpoints carrying a
         // particular marker). The ProblemDetailsContext.HttpContext passed to CustomizeProblemDetails
         // must therefore still carry the endpoint that routing resolved.
@@ -805,5 +807,79 @@ public class BsftExceptionMiddlewareTests
         ((int)response.StatusCode).Should().Be(StatusCodes.Status409Conflict);
         observedOwner.Should().Be("legacy-worker-claims");
         await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenTheLogProviderThrowsForAMappedFailure_StillAnswersWithTheMappedStatus()
+    {
+        using var host = await CreateHostAsync(
+            _ => throw new NotFoundException("Order", "order-123"),
+            services => services.AddLogging(logging => logging.AddProvider(new ThrowingLoggerProvider())));
+
+        var response = await host.GetTestClient().GetAsync("/");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("test-correlation-id");
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenTheLogProviderThrowsForAnUnmappedFailure_StillAnswersWith500()
+    {
+        using var host = await CreateHostAsync(
+            _ => throw new InvalidOperationException("boom"),
+            services => services.AddLogging(logging => logging.AddProvider(new ThrowingLoggerProvider())));
+
+        var response = await host.GetTestClient().GetAsync("/");
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("test-correlation-id");
+        await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenTheLoggerThrowsAfterTheResponseStarted_LeavesTheStartedResponseAlone()
+    {
+        var context = new DefaultHttpContext();
+        context.Features.Set<IHttpResponseFeature>(new StartedResponseFeature());
+        var body = new MemoryStream();
+        context.Response.Body = body;
+        var correlationContext = Substitute.For<ICorrelationContext>();
+        correlationContext.CorrelationId.Returns("cid");
+        RequestDelegate next = _ => throw new InvalidOperationException("boom after response started");
+        var middleware = new BsftExceptionMiddleware(next, new ThrowingLogger());
+
+        await middleware.InvokeAsync(context, correlationContext);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK, "the status of a started response is not rewritten");
+        body.Length.Should().Be(0, "no ProblemDetails document is appended to a response that is on the wire");
+    }
+
+    private sealed class StartedResponseFeature : HttpResponseFeature
+    {
+        public override bool HasStarted => true;
+    }
+
+    private sealed class ThrowingLoggerProvider : ILoggerProvider
+    {
+        // Only the middleware's logger throws: the host logs its own start and stop through the same
+        // provider, and a start that fails would end the test before the request it is about.
+        public ILogger CreateLogger(string categoryName) =>
+            categoryName == typeof(BsftExceptionMiddleware).FullName ? new ThrowingLogger() : NullLogger.Instance;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ThrowingLogger : ILogger<BsftExceptionMiddleware>
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("Cannot open log for source '.NET Runtime'. You may not have write access.");
     }
 }

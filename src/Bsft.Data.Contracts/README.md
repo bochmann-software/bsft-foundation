@@ -1,6 +1,6 @@
 # Bsft.Data.Contracts
 
-The wire vocabulary of the `Bsft.Data` query surface — the paged request and result, the filter AST,
+The wire vocabulary of the `Bsft.Data` query surface — the paged request and result (offset and keyset), the filter AST,
 the sort criteria and the search request — with no dependencies at all, so a client can speak it
 without acquiring the query engine.
 
@@ -37,8 +37,10 @@ caller-supplied filter are enforced by `BsftFilterTransportOptions` in `Bsft.Hos
 
 `FilterNode` is a concrete base class with `[JsonDerivedType]` attributes naming `AndNode`, `OrNode`,
 `ComparisonNode` and `PresenceNode`; the discriminators are the serialization contract, so a new node
-type is a wire-format change and belongs in this package rather than in an application. `PagedResult<T>`
-and `RankedItem<T>` are generic over the row type an application returns, and `IEntityTaggedItem` is
+type is a wire-format change and belongs in this package rather than in an application. `PagedResult<T>`,
+`CursorPagedResult<T>` (the keyset page: items, page size, an opaque `nextCursor` absent on the last
+page, and a `totalCount` only when `CursorPagedRequest.IncludeTotalCount` asked for it) and
+`RankedItem<T>` are generic over the row type an application returns, and `IEntityTaggedItem` is
 the one seam a DTO implements itself, so that a list response can carry a per-row entity tag for
 conditional requests. Nothing here is replaceable at runtime.
 

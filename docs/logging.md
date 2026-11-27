@@ -32,6 +32,10 @@ level from the options, filters the `Microsoft` and `System` categories to
 `EnableFileLogging` is true. Reach for `AddBsftFileLogger` on an `ILoggingBuilder`
 when you want the file output without the rest of the opinion.
 
+`ClearProviders()` is also what keeps the Windows event log provider out: the default host builders add it, it logs
+Warning and above, and where the process may not write to the event log the first warning throws out of the caller. See
+[hosting.md](hosting.md#why-a-default-hosts-providers-are-a-risk-on-windows).
+
 Both take an **optional** configure delegate.
 
 ## Options

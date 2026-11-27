@@ -21,6 +21,7 @@ public sealed class PollLoop : IPollLoop
     private readonly Func<CancellationToken, Task<PollPassOutcome>> _pass;
     private readonly IPollReporter _reporter;
     private readonly TimeSpan _interval;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PollLoop"/> class.
@@ -29,18 +30,24 @@ public sealed class PollLoop : IPollLoop
     /// <param name="reporter">Receives what the loop has to say about the passes it ran.</param>
     /// <param name="interval">
     /// How long the loop waits before a pass that asked to wait. It is not validated here: the wait
-    /// is a plain <see cref="Task.Delay(TimeSpan, CancellationToken)"/>, so an interval that cannot
-    /// be waited is rejected by that call, with its argument name and its own message.
+    /// is a plain <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/>, so an interval
+    /// that cannot be waited is rejected by that call, with its argument name and its own message.
+    /// </param>
+    /// <param name="timeProvider">
+    /// The clock the wait between passes runs on: the service's injected <see cref="TimeProvider"/>,
+    /// so a test drives the interval instead of waiting it out.
     /// </param>
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     public PollLoop(
         Func<CancellationToken, Task<PollPassOutcome>> pass,
         IPollReporter reporter,
-        TimeSpan interval)
+        TimeSpan interval,
+        TimeProvider timeProvider)
     {
         _pass = pass ?? throw new ArgumentNullException(nameof(pass));
         _reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         _interval = interval;
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     /// <inheritdoc />
@@ -61,7 +68,7 @@ public sealed class PollLoop : IPollLoop
                 if (pass.IsFaulted)
                 {
                     _reporter.ReportPassFailed(FailureOf(pass.Exception!));
-                    await Task.Delay(_interval, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_interval, _timeProvider, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -72,7 +79,7 @@ public sealed class PollLoop : IPollLoop
                 if (pass.IsCanceled && !stoppingToken.IsCancellationRequested)
                 {
                     _reporter.ReportPassCanceledWithoutStop();
-                    await Task.Delay(_interval, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_interval, _timeProvider, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -81,7 +88,7 @@ public sealed class PollLoop : IPollLoop
                 var outcome = await pass.ConfigureAwait(false);
 
                 if (outcome != PollPassOutcome.PollAgain)
-                    await Task.Delay(_interval, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_interval, _timeProvider, stoppingToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

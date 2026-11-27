@@ -1,5 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\PollIntervalCounts.cs" Link="Shared\PollIntervalCounts.cs" />
+    <Compile Include="..\Shared\PollIntervalProbe.cs" Link="Shared\PollIntervalProbe.cs" />
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+    <Compile Include="..\Shared\ManualTimestampProvider.cs" Link="Shared\ManualTimestampProvider.cs" />
     <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
     <Compile Include="..\Shared\RecordingTimeProvider.cs" Link="Shared\RecordingTimeProvider.cs" />
   </ItemGroup>

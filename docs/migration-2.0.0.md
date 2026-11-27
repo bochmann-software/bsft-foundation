@@ -271,3 +271,46 @@ step it needs.
 | Members renamed | Build; the [member table](#members-renamed) gives each new name |
 | Parameters renamed | Only named arguments break (CS1739); use the canonical name |
 | Wire and persisted names | The table above, row by row, before the first 2.0.0 instance starts |
+
+## Changed after 2.0.0: OpenAPI and API versioning move to `Bsft.Hosting.OpenApi`
+
+This change lands after 2.0.0, in the next release, and is listed here with the other namespace
+moves because a consumer applies it the same way. `Bsft.Hosting` carried Swashbuckle 6.9.0 and
+Asp.Versioning 8.1.0 for its Swagger and API-versioning components, so a host that pins an older
+Swashbuckle, to keep a generated OpenAPI document byte-identical for one, could not take CORS, rate
+limiting or health checks from it either. Those two components and the one-call conveniences that
+compose them now live in a new Foundation package, `Bsft.Hosting.OpenApi`, which references
+`Bsft.Hosting`. `Bsft.Hosting` itself no longer references Swashbuckle or Asp.Versioning.
+
+Behaviour, configuration sections (`Bsft:Hosting:*`), option defaults and validation are unchanged.
+`AddBsftDefaults` still registers every component, Swagger and versioning included, and
+`UseBsftDefaults` still orders the middleware as before.
+
+| Type | Before | Now |
+| --- | --- | --- |
+| `HostingServiceCollectionExtensions` (`AddBsftDefaults`) | `Bsft.Hosting.DependencyInjection` in `Bsft.Hosting` | `Bsft.Hosting.OpenApi.DependencyInjection` in `Bsft.Hosting.OpenApi` |
+| `HostingApplicationBuilderExtensions` (`UseBsftDefaults`) | `Bsft.Hosting.DependencyInjection` in `Bsft.Hosting` | `Bsft.Hosting.OpenApi.DependencyInjection` in `Bsft.Hosting.OpenApi` |
+| `BsftDefaultsConfiguration` | `Bsft.Hosting.DependencyInjection` in `Bsft.Hosting` | `Bsft.Hosting.OpenApi.DependencyInjection` in `Bsft.Hosting.OpenApi` |
+| `SwaggerServiceCollectionExtensions` (`AddBsftSwagger`) | `Bsft.Hosting.DependencyInjection` in `Bsft.Hosting` | `Bsft.Hosting.OpenApi.DependencyInjection` in `Bsft.Hosting.OpenApi` |
+| `SwaggerApplicationBuilderExtensions` (`UseBsftSwagger`) | `Bsft.Hosting.DependencyInjection` in `Bsft.Hosting` | `Bsft.Hosting.OpenApi.DependencyInjection` in `Bsft.Hosting.OpenApi` |
+| `VersioningServiceCollectionExtensions` (`AddBsftApiVersioning`) | `Bsft.Hosting.DependencyInjection` in `Bsft.Hosting` | `Bsft.Hosting.OpenApi.DependencyInjection` in `Bsft.Hosting.OpenApi` |
+| `BsftSwaggerOptions` | `Bsft.Hosting` in `Bsft.Hosting` | `Bsft.Hosting.OpenApi` in `Bsft.Hosting.OpenApi` |
+| `BsftVersioningOptions` | `Bsft.Hosting` in `Bsft.Hosting` | `Bsft.Hosting.OpenApi` in `Bsft.Hosting.OpenApi` |
+
+What a consumer changes:
+
+- **A host that calls `AddBsftDefaults`, `UseBsftDefaults`, `AddBsftSwagger`, `UseBsftSwagger` or
+  `AddBsftApiVersioning`** adds a package reference to `Bsft.Hosting.OpenApi` (at the Foundation
+  version, like `Bsft.Hosting`) and `using Bsft.Hosting.OpenApi.DependencyInjection;` next to its
+  `using Bsft.Hosting.DependencyInjection;`. A file that names `BsftSwaggerOptions` or
+  `BsftVersioningOptions` also takes `using Bsft.Hosting.OpenApi;`; a lambda passed to
+  `.Swagger(...)` or `.ApiVersioning(...)` needs no further using. The `Bsft.Hosting` reference may
+  stay or go, since the new package brings it.
+- **A project that uses Swashbuckle or Asp.Versioning types directly** (`UseSwagger`, `NewApiVersionSet`,
+  `[ApiVersion]`, an `IOperationFilter`) and received those packages only transitively through
+  `Bsft.Hosting` now receives them through `Bsft.Hosting.OpenApi`, or references them itself.
+- **A host that wants CORS, rate limiting, health checks or any other `Bsft.Hosting` component
+  without Swashbuckle** references `Bsft.Hosting` alone and calls the components' own `AddBsft*` /
+  `UseBsft*` pairs, which did not move.
+- **A binary compiled against the old `Bsft.Hosting`** has to be recompiled. The moved types cannot
+  be forwarded, because `Bsft.Hosting` does not reference the package they moved to.

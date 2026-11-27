@@ -37,6 +37,18 @@ public sealed class BsftMessagingPostgresOptions
     public string? ConnectionString { get; set; }
 
     /// <summary>
+    /// Gets or sets whether a save wakes this process's dispatcher directly instead of announcing itself
+    /// through <c>pg_notify</c>. Defaults to <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// Switch it on when the tenants live in databases of their own (silo mode): a <c>LISTEN</c> session on
+    /// one connection hears one database, so it would wake the dispatcher for one tenant only. With this on,
+    /// no listening connection is opened, <see cref="NotificationChannel"/> and <see cref="ConnectionString"/>
+    /// go unused, and the poll interval stays the guarantee for rows another instance committed.
+    /// </remarks>
+    public bool IsInProcessWake { get; set; }
+
+    /// <summary>
     /// Gets or sets how long the listener waits before it reconnects after its connection ended.
     /// Defaults to five seconds. It has to be positive: reconnecting without a pause turns a server
     /// that is restarting into a connection storm.

@@ -39,9 +39,29 @@ public sealed class ModuleCatalog : IModuleCatalog
     /// <typeparam name="TModule">The type implementing <see cref="IModule"/>.</typeparam>
     /// <returns>This catalog instance for fluent chaining.</returns>
     /// <exception cref="InvalidOperationException">Thrown when a module with the same name is already registered.</exception>
-    public ModuleCatalog Add<TModule>() where TModule : class, IModule
+    public ModuleCatalog Add<TModule>() where TModule : class, IModule => Add(typeof(TModule));
+
+    /// <summary>
+    /// Registers a module by a CLR type known only at run time, such as one a host discovered by scanning
+    /// the assemblies it was built with. The type must be a concrete class implementing
+    /// <see cref="IModule"/> with a public parameterless constructor, which is what
+    /// <see cref="Add{TModule}"/> states as generic constraints.
+    /// </summary>
+    /// <param name="moduleType">The type implementing <see cref="IModule"/>.</param>
+    /// <returns>This catalog instance for fluent chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="moduleType"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="moduleType"/> is not a concrete class implementing <see cref="IModule"/>
+    /// with a public parameterless constructor. Refused here, where the caller still knows which type it
+    /// passed, rather than as an activation failure at load time.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">Thrown when a module with the same name is already registered.</exception>
+    public ModuleCatalog Add(Type moduleType)
     {
-        var instance = Activator.CreateInstance<TModule>();
+        ArgumentNullException.ThrowIfNull(moduleType);
+        RequireModuleType(moduleType);
+
+        var instance = (IModule)Activator.CreateInstance(moduleType)!;
         var name = instance.Name;
 
         if (Contains(name))
@@ -53,13 +73,43 @@ public sealed class ModuleCatalog : IModuleCatalog
             Name: name,
             Version: instance.Version,
             Enabled: true,
-            ModuleType: typeof(TModule),
+            ModuleType: moduleType,
             AssemblyPath: null,
             DependsOn: instance.DependsOn.ToArray(),
             Instance: instance));
 
         return this;
     }
+
+    /// <summary>Refuses a type that cannot be created as a module.</summary>
+    /// <param name="moduleType">The type to check.</param>
+    /// <exception cref="ArgumentException">Thrown when the type is not a creatable module.</exception>
+    internal static void RequireModuleType(Type moduleType)
+    {
+        if (!IsConcreteClass(moduleType))
+            throw new ArgumentException(
+                $"The module type '{moduleType.FullName}' is not a concrete class.", nameof(moduleType));
+
+        if (!typeof(IModule).IsAssignableFrom(moduleType))
+            throw new ArgumentException(
+                $"The module type '{moduleType.FullName}' does not implement {nameof(IModule)}.", nameof(moduleType));
+
+        if (moduleType.GetConstructor(Type.EmptyTypes) is null)
+            throw new ArgumentException(
+                $"The module type '{moduleType.FullName}' has no public parameterless constructor.", nameof(moduleType));
+    }
+
+    /// <summary>
+    /// Says whether a scan may create the type as a module: a concrete, closed class implementing
+    /// <see cref="IModule"/> with a public parameterless constructor. A scan skips anything else, such as an
+    /// abstract or open generic base module or one built by a factory, rather than failing on it.
+    /// </summary>
+    /// <param name="type">The scanned type.</param>
+    /// <returns><see langword="true"/> when the type can be created as a module.</returns>
+    internal static bool IsCreatableModule(Type type) =>
+        IsConcreteClass(type) && typeof(IModule).IsAssignableFrom(type) && type.GetConstructor(Type.EmptyTypes) is not null;
+
+    private static bool IsConcreteClass(Type type) => type is { IsClass: true, IsAbstract: false, ContainsGenericParameters: false };
 
     /// <summary>
     /// Reads module descriptors from a JSON configuration file.
@@ -140,7 +190,7 @@ public sealed class ModuleCatalog : IModuleCatalog
             {
                 var assembly = Assembly.LoadFrom(dll);
                 var moduleTypes = assembly.GetTypes()
-                    .Where(t => t is { IsClass: true, IsAbstract: false } && typeof(IModule).IsAssignableFrom(t));
+                    .Where(IsCreatableModule);
 
                 foreach (var moduleType in moduleTypes)
                 {

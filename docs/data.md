@@ -153,6 +153,292 @@ and the notification digest sweep
 (`Bsft.Notifications`) both close their own unit of work through
 it.
 
+## A transaction across several contexts
+
+A modular host often has one database and one context per module, each with its
+own schema and its own migrations history. A command of one module that
+dispatches a command to another then writes through two contexts, and the
+single-context unit of work above cannot make that atomic. The shared transaction
+can, from 2.2.1-preview.1 on. It is opt-in: a host that does not register it keeps
+everything above unchanged.
+
+```csharp
+services.AddBsftDataSharedTransaction(_ => new NpgsqlConnection(connectionString));
+
+services.AddDbContext<CatalogDbContext>((sp, options) => options
+    .UseBsftSharedTransaction(sp, (o, connection) => o.UseNpgsql(connection,
+        npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "catalog"))));
+services.AddDbContext<InventoryDbContext>((sp, options) => options
+    .UseBsftSharedTransaction(sp, (o, connection) => o.UseNpgsql(connection,
+        npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "inventory"))));
+```
+
+On PostgreSQL, `Bsft.Data.Postgres` shortens both calls and adds the failure
+classification described below:
+
+```csharp
+services.AddBsftDataPostgresTransaction(connectionString);
+services.AddDbContext<CatalogDbContext>((sp, options) => options
+    .UseBsftSharedNpgsql(sp, npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "catalog")));
+```
+
+The PostgreSQL registration is `AddBsftDataPostgresTransaction`, not
+`AddBsftDataPostgresSharedTransaction`, on purpose: the longer name breaks the
+30-character limit on method names, and the package registers nothing else called
+a transaction, so the shorter one is unambiguous. The pair stays recognizable by
+its options call, `UseBsftSharedNpgsql`.
+
+**One connection per scope.** `AddBsftDataSharedTransaction` registers one
+scoped instance behind `IAmbientTransaction`, `ITransactionalUnitOfWork` and
+`IUnitOfWork` (all from [`Bsft.Core.Persistence`](core.md#the-unit-of-work)). It
+creates the scope's connection with the host's factory the first time a context or
+a unit needs it and disposes it with the scope. `UseBsftSharedTransaction` hands
+that connection to the context's provider call, so every enlisted context of a
+scope talks over the same connection while everything else about the provider
+(schema, migrations history table, command timeout) stays per context. The API is
+provider-agnostic: the connection factory and the provider call are the host's.
+
+**The outermost unit opens, every nested one joins.** The first
+`ExecuteAsync` of a scope opens the connection if it is closed, begins one
+transaction and runs the work. Any `ExecuteAsync` started while it runs, a nested
+`[Transactional]` command or a package typed against `ITransactionalUnitOfWork`,
+only runs its work: it never begins a second transaction and never commits.
+After the outermost work returned, every enlisted context that still tracks a
+change is saved, and the transaction commits once. A handler that calls
+`SaveChangesAsync` writes into the open transaction; nothing is visible to
+other connections before the outermost commit. An advisory lock taken with
+`pg_advisory_xact_lock` in any enlisted context is therefore held until that
+commit.
+
+**A context resolved late enlists itself, as it initializes.** A context resolved
+inside an open unit (the context of a module that only a nested command reaches)
+takes the open transaction the moment EF Core initializes it, which is the first
+time anything touches its `Database`, a query or a save. A store that asks
+`Database.CurrentTransaction` before its first command, to join its caller's
+transaction or begin one of its own, therefore finds the shared one and joins it.
+The hook is EF Core's `ContextInitialized` diagnostic event, matched to the scope
+through the interceptor `UseBsftSharedTransaction` adds to the context's options;
+the interceptor also enlists right before the first command and before the first
+save, for a context that initialized before the unit began. The save hook matters
+because `SaveChanges` would otherwise open a transaction of its own, which the
+providers refuse on a connection that already has one. When the unit ends, every
+context gives the transaction back together with its hold on the connection, so a
+query the context runs later opens and closes the connection itself, which
+returns it to the pool. A context disposed inside the unit (one a handler created
+from the options and disposed) is forgotten: its disposal already gave the
+transaction back.
+
+**A cleanup after the commit does not fail the unit.** Taking the transaction
+back from the contexts and disposing it run whatever the other did. When either
+fails after the commit, the failure is logged as a warning and the unit reports
+success, because it persisted; reporting it as failed would make a caller, or a
+retry, write it again.
+
+**Any failure rolls back everything.** An exception out of the outermost work,
+out of the final saves or out of the commit disposes the transaction uncommitted,
+which rolls back every write of every context, including what a nested unit wrote
+before it. The change trackers of all enlisted contexts are cleared, because they
+still describe rows that no longer exist. A nested unit that failed marks the
+transaction for rollback: if an outer handler catches that exception and returns
+normally, the outermost unit throws `AmbientTransactionMisuseException` instead
+of committing, because the store typically aborted the transaction with the
+nested failure anyway. The first failure of a nested unit is its inner exception
+(from 2.2.1-preview.2), and the provider's conflict classification looks at it, so
+a `40001` or `40P01` that a nested unit raised without a failing EF Core command —
+a raw command on the shared connection, an error while rows were read — and that
+an outer handler caught still makes `[Retryable]` re-run the whole unit. The nested
+failure counts only through that chain and ends with its unit: a handler that
+catches it and then throws an exception of its own decides the outcome itself, and
+only that exception is classified.
+
+The same holds for a single failed or cancelled database command whose exception a
+handler swallows. PostgreSQL aborts the transaction with the failure and answers
+the later `COMMIT` with `ROLLBACK`, which Npgsql does not report as an error, so
+the unit would otherwise return success for writes that were never persisted. The
+enlisting interceptor records the first command failure or cancellation of the
+open transaction (EF Core's `CommandFailed` and `CommandCanceled`), and the
+outermost unit then throws `AmbientTransactionMisuseException` with that failure
+as its inner exception. The provider's conflict classification looks at that recorded
+failure too, so a swallowed `40001` or `40P01` still makes `[Retryable]` re-run the
+unit, even when what the handler throws afterwards is PostgreSQL's "current
+transaction is aborted".
+
+One failure is not recorded: a `SaveChanges` that EF Core protected with its own
+savepoint. Inside a transaction it did not open, EF Core creates a savepoint
+before each save (`Database.AutoSavepointsEnabled`, on by default) and rolls back
+to it when the save fails, so a handler that catches a unique violation from
+`SaveChangesAsync` and carries on leaves the transaction committable, on SQLite
+and on PostgreSQL alike. The unit commits in that case; what the failed save
+wrote is gone, and the change tracker still holds the entities it could not save,
+so the handler detaches them or the final save tries them again.
+
+**The store is asked before the commit.** The interceptor sees only commands that
+run through an enlisted context, and not even all of those: an error PostgreSQL
+raises while EF Core reads the rows of a query (`ToListAsync` over a result that
+fails at row 1000) reaches no interceptor at all, and neither does a command a
+handler creates on the raw connection. So before it commits, the outermost unit
+asks every registered `ITransactionAbortProbe` whether the store has already
+aborted the transaction, and throws `AmbientTransactionMisuseException` with the
+store's answer as inner exception instead of committing. `Bsft.Data.Postgres`
+registers a probe that sends `SELECT 1` inside the transaction and reports the
+`25P02` it gets on an aborted one; it costs one round trip per outermost unit,
+0.3 ms against a local PostgreSQL 16, next to about 7 ms for a one-row insert and
+its commit. A failure only the probe sees is not classified as a conflict: the
+unit fails with `25P02` and is not retried, because the original error is gone.
+
+`AmbientTransactionMisuseException` (`Bsft.Core.Persistence`) derives from
+`InvalidOperationException`, what these failures were thrown as before, so an
+existing `catch` keeps working. It has a type of its own so that the mediator's
+retry behavior can leave it alone: a swallowed failure fails the same way on
+every attempt, and a unit refused beside a running one would succeed in a fresh
+scope and hide the bug. The one exception is the swallowed conflict above, which
+is still retried through its inner exception.
+Without a probe (the provider-agnostic registration), such a failure stays
+invisible to the unit, exactly as it is to EF Core.
+
+**Observing the unit's own connection steps** (from 2.2.1-preview.4). Opening
+the connection, beginning the transaction, the probe, the commit, disposing the
+transaction and closing the connection run on the `DbConnection` and
+`DbTransaction` directly, so no EF Core interceptor sees them. A host that admits
+one operation on the scope's connection at a time registers a scoped
+`ISharedTransactionStepObserver` (`Bsft.Data.Transactions`), which is told
+`OnStepStarting` and `OnStepCompleted` for each `SharedTransactionStepInfo`: its
+`Kind` (`Open`, `Begin`, `AbortProbe`, `Commit`, `Rollback`, `Release`, `Close`)
+and the shared `Connection`. `Open` and `Close` are reported only when the unit
+opens the connection itself, `AbortProbe` only when a probe is registered,
+`Rollback` is the dispose of a transaction that did not commit and `Release` the
+dispose after a commit. Savepoints and the saves of the contexts go through EF
+Core and are not reported. Steps never overlap, and only the outermost unit runs
+them.
+
+```csharp
+services.AddScoped<ISharedTransactionStepObserver, ConnectionGuardObserver>();
+```
+
+Both calls are synchronous. Several observers are told in registration order and
+completed in reverse; `OnStepCompleted` runs in a `finally` for every observer
+whose `OnStepStarting` returned, also when the step failed or was cancelled. An
+exception from `OnStepStarting` refuses `Open`, `Begin`, `AbortProbe` or `Commit`:
+the step does not run and the exception propagates unchanged (not wrapped in
+`AmbientTransactionMisuseException`); a refused commit rolls back like a failed
+one. `Rollback`, `Release` and `Close` run anyway, so the transaction is always
+released and the connection always closed, and the exception is logged as a
+warning, never thrown: after a commit, throwing would report a persisted unit as
+failed and let a retry write it twice, and a unit that did not commit already
+fails with an exception of its own. `AbortProbe` is one step, however many probes
+are registered. An exception from `OnStepCompleted` is logged and ignored.
+Without an observer nothing changes.
+
+An observer decides at once: it admits a step by returning and refuses it by
+throwing. It never waits for another operation to end (no blocking `Wait`,
+`Result` or lock held by foreign work), because both calls run synchronously on
+the unit's own flow between the steps of an open transaction. Neither call may
+use the scope's connection or transaction itself.
+
+`Bsft.FeatureFlags` registers one observer of its own (since 2.2.1-preview.6): it
+admits every step and uses `Begin`, `Rollback` and `Release` only to announce a flag
+change made inside the unit after the commit, and never after a rollback (see
+feature-flags.md).
+A host that registers `AddBsftFeatureFlags` therefore always has an observer.
+
+Once the outermost work has returned, the unit no longer observes the caller's
+cancellation token (from 2.2.1-preview.2; before, only the commit itself did not):
+saving what the contexts still track, asking the probe and committing all run with
+`CancellationToken.None`. A caller that cancels after the work completed has
+nothing left to stop, so the completed work commits; abandoning the commit halfway
+would leave the caller unable to tell whether the unit persisted. A cancellation
+that a command inside the work observes still fails the unit, and nothing commits.
+Those final statements are then bounded only by the provider's command timeout
+(`CommandTimeout`, 30 seconds by default on Npgsql), not by the caller's token: a
+context configured with `CommandTimeout = 0` (no limit) can wait on a lock in the
+final save indefinitely. Keep a finite command timeout, or save explicitly inside
+the work, where the caller's token still applies.
+
+**Retries are whole units, each in a fresh scope.** With `[Retryable]` from
+[`Bsft.Resilience.Mediator`](resilience.md#mediator-retry-optional-package), a failed
+outermost attempt is retried in a new dependency-injection scope: a new
+connection, new contexts and a new transaction, with nothing the failed attempt
+left behind in a scoped service. A host carries the state of the request's scope
+(the tenant, the current user) into the fresh one with an `IRequestScopeSeed`
+([mediator.md](mediator.md#rescoping-behaviors)). A nested request is never
+retried on its own, because a retry inside an aborted transaction cannot
+succeed. The provider classifies which failures are a conflict
+with a concurrent transaction through `ITransactionConflictClassifier`;
+`Bsft.Data.Postgres` registers one for `40001` (serialization failure) and
+`40P01` (deadlock), and the retry behavior retries such a failure whatever its
+own predicate says. A retried unit runs its whole work again, so everything it
+does outside the database (a mail, an HTTP call) must be idempotent or deferred
+to an outbox; the database writes of the failed attempt are rolled back.
+
+**The isolation level** is `BsftDataOptions.SharedTransaction.IsolationLevel`
+(`Bsft:Data:SharedTransaction:IsolationLevel` where the section is bound),
+`Unspecified` by default, which is read committed on PostgreSQL. `Serializable` or
+`RepeatableRead` make PostgreSQL refuse a conflicting commit with `40001`, which is
+what the retry above is for.
+
+```csharp
+services.Configure<BsftDataOptions>(o => o.SharedTransaction.IsolationLevel = IsolationLevel.Serializable);
+```
+
+What it requires and what it does not do:
+
+- **One unit at a time per scope.** The scope's transaction belongs to the
+  async flow that opened it. A unit started from that flow while it runs joins
+  it; a unit started from another flow of the same scope at the same time (two
+  requests started with `Task.WhenAll` on one scope) throws
+  `AmbientTransactionMisuseException` instead of silently joining a transaction
+  it does not own. Run parallel work in scopes of its own.
+- **Registered before it is enlisted.** `UseBsftSharedTransaction` throws an
+  `InvalidOperationException` naming the context when neither
+  `AddBsftDataSharedTransaction` nor `AddBsftDataPostgresTransaction` is
+  registered.
+- **Scoped, unpooled contexts.** The options of an enlisted context are built per
+  scope, which `AddDbContext` does by default. `AddDbContextPool` and
+  `AddDbContextFactory` build them once, from the root provider, for every scope
+  and would hand one connection and one transaction to all of them;
+  `UseBsftSharedTransaction` therefore throws when it is called with the root
+  provider. The context is recorded under the type its options name, so register
+  it under its own type.
+- **No `EnableRetryOnFailure` on an enlisted context.** A retrying execution
+  strategy refuses a transaction it did not open, and retrying one statement of a
+  shared transaction is wrong anyway. Enlisting such a context throws an
+  `AmbientTransactionMisuseException` naming it; retry with `[Retryable]`
+  instead.
+- **Not together with `AddBsftDataUnitOfWork<TContext>`.** The single-context
+  unit would begin a second transaction on the shared connection. A startup
+  validator fails when both are registered; the shared transaction already
+  provides `IUnitOfWork` and `ITransactionalUnitOfWork`.
+- **EF Core interceptors keep working.** Save interceptors such as the tenant
+  `TenantSaveChangesInterceptor` and the audit outbox interceptor of
+  `Bsft.Auditing.EFCore` run on every save as before, and their rows commit or roll
+  back with the unit. EF Core raises no transaction events for a transaction
+  handed to a context from outside, so a component that waits for a context's own
+  commit event, such as the deferred cache invalidation of
+  `Bsft.Organization.EFCore`, does not see this one and keeps refusing to run
+  inside it.
+- **No savepoints of its own.** A nested unit is all or nothing with its outer
+  unit. EF Core still creates its own savepoint around each `SaveChanges` inside
+  the transaction, as it does for any transaction it did not open, which is what
+  lets a caught save failure leave the unit committable (above).
+- **Modules that begin a transaction unconditionally stay outside.** The stores
+  that join a caller's transaction when `Database.CurrentTransaction` is set work
+  on an enlisted context: `Bsft.Hierarchy.EFCore`, `Bsft.Organization.EFCore`,
+  `Bsft.Billing.EFCore`, `Bsft.Chat.EFCore`, `Bsft.DataTransfer.EFCore`, the
+  directory invitations of `Bsft.Auth.Oidc.Organization.EFCore` and the stores of
+  `Bsft.AI.Agents.EFCore`, `Bsft.AI.Memory.EFCore` and `Bsft.AI.Skills.EFCore`.
+  The following begin a transaction of their own at a fixed isolation level
+  whatever the context already has, and fail on an enlisted context, because the
+  providers refuse a second transaction on the connection: the credential ledger
+  of `Bsft.Auth.Credentials.EFCore`, the recovery codes of
+  `Bsft.Auth.Factors.EFCore`, the token redemption of `Bsft.Security.EFCore`, the
+  subscription cap of `Bsft.Webhooks.EFCore` and the work claim of
+  `Bsft.Jobs.EFCore`. Register their contexts without `UseBsftSharedTransaction`;
+  they then commit on a connection of their own, independently of the unit.
+
+With the mediator, `TransactionBehavior` runs every `[Transactional]` request as a
+unit of this transaction and no longer needs a base `DbContext` registration to
+pick a context; see [mediator.md](mediator.md#transactions).
+
 ## Requesting a page
 
 ```csharp
@@ -204,6 +490,91 @@ none. The tag must be the same value the resource's `GET` by id serves; the rule
 and the one-place derivation are in
 [crud-conventions.md](crud-conventions.md#every-list-row-carries-its-own-validator).
 
+## Keyset (cursor) paging
+
+Offset paging reads and throws away every row before the page, so a deep page on a large table is
+slow, and a row inserted meanwhile shifts every later page by one. A listing of a large or growing
+table pages by keyset instead: the next page starts strictly after the last row of the previous one,
+in a fixed order on a sort key with the row's id as the tie-breaker. It pages forward only.
+
+```csharp
+public record CursorPagedRequest(string? Cursor = null, int PageSize = 25)
+{
+    public bool IncludeTotalCount { get; init; }   // off by default: counting costs what keyset saves
+}
+
+public record CursorPagedResult<T>(IReadOnlyList<T> Items, int PageSize, string? NextCursor)
+{
+    public long? TotalCount { get; init; }          // only when the request asked for it
+}
+```
+
+Both live in `Bsft.Data.Contracts` beside `PagedRequest` and `PagedResult<T>`, which are unchanged.
+On the wire a page is `{ "items": [...], "pageSize": 25, "nextCursor": "...", "totalCount": 9 }`;
+`nextCursor` and `totalCount` are left out when null, so the absence of `nextCursor` is what marks the
+last page. A client passes `nextCursor` back as `cursor`, unchanged, and starts with none.
+
+The order of a listing is declared once, and the reader applies it:
+
+```csharp
+private static readonly KeysetOrder<Reading, DateTime, long> ByRecordedAt =
+    new("readings.by-recorded", r => r.RecordedAt, r => r.Id);   // SortDirection.Desc for newest first
+
+services.AddBsftDataKeysetPaging();   // or (configuration), binding Bsft:Data:KeysetPaging (MaxPageSize)
+
+CursorPagedResult<Reading> page = await reader.ListAsync(   // IKeysetPageReader
+    db.Readings.AsNoTracking().Where(r => r.MeterId == meterId),
+    ByRecordedAt,
+    new CursorPagedRequest(cursor, pageSize),
+    cancellationToken);
+```
+
+The query is narrowed and ordered with plain LINQ, so every EF Core provider translates it and no SQL
+is written by hand. On SQLite it reads
+
+```sql
+WHERE "r"."RecordedAt" > @Key OR ("r"."RecordedAt" = @Key AND "r"."Id" > @Id)
+ORDER BY "r"."RecordedAt", "r"."Id"
+```
+
+with `<` and `DESC` for a descending order; a string key is compared through
+`string.Compare(a, b) > 0`, which EF Core turns into `a > b`. The position is a parameter, never a
+literal. One row more than the page size is read to learn whether a next page exists, so no count is
+needed for that; the total is a separate `COUNT` of the whole (filtered) query and only runs when
+asked for. An index on `(key, id)` is what makes the page cheap.
+
+The page size is the client's: a size above `KeysetPagingOptions.MaxPageSize` (default 100, the
+offset surface's maximum, validated at start-up) is clamped to it and the page reports the size it
+applied, and a size below 1 is refused with a `ValidationException` keyed on `pageSize` and carrying
+`KeysetPagingErrorCodes.InvalidPageSize` (`KEYSET_INVALID_PAGE_SIZE`), a 400.
+
+**The cursor is opaque.** `IKeysetCursorSerializer` writes base64url without padding over a versioned
+binary payload: the format version, a type code and the invariant text of the key and the id, and a
+16-byte SHA-256 checksum over the payload and the listing name. Reading checks all of it before any
+query runs, and a cursor that is malformed, altered, of an unknown version, of other key or id types,
+of another listing, or longer than 1024 characters is refused with a `ValidationException` keyed on
+`cursor` and carrying `KeysetPagingErrorCodes.InvalidCursor` (`KEYSET_INVALID_CURSOR`), which
+`BsftExceptionMiddleware` answers with a 400. The checksum is not a signature: a client that recomputes
+it can name any position of a listing, which grants nothing, because a position only says where a page
+starts in rows the query already lets the caller read. It does mean the 400 is guaranteed for a
+cursor that is malformed or altered, not for one forged with a recomputed checksum: such a cursor can
+carry any value of the key type, `DateTime.MinValue` for one, and a column type narrower than the CLR
+type (SQL Server's `datetime`, a `decimal(18,2)`) can then fail in the provider. A cursor also carries
+the key and id of a page's last row readably once decoded, so do not key a listing on a column the
+response hides. An empty cursor is refused rather than read as the first page.
+
+Supported key and id types are `string`, `Guid`, `int`, `long`, `decimal`, `DateTime` (its kind is
+kept), `DateTimeOffset` and `DateOnly`; another type is refused with `NotSupportedException` before
+the query runs. Neither may be nullable, and the id must be unique within the listing. The key must be
+a column the provider can order: SQLite, for one, refuses to order by `decimal` or `DateTimeOffset`.
+The key and the id together have to fit 745 UTF-8 bytes, what a 1024-character cursor leaves
+beside its header and checksum; writing a longer one fails with `InvalidOperationException`, so a string key or id needs a
+bounded column length.
+Changing the listing name or the order invalidates the cursors clients hold.
+
+A reader that composes its own keyset query uses `IKeysetCursorSerializer` directly to read the
+position out of a cursor and to write the next one.
+
 ## The filter language
 
 Filters arrive as a small JSON AST rather than a string expression, so there is
@@ -226,9 +597,10 @@ public class PresenceNode : FilterNode         // the pr (present) operator — 
 ```
 
 `FilterOperator` covers `Eq, Neq, Gt, Gte, Lt, Lte, Contains, NotContains,
-StartsWith, NotStartsWith, EndsWith, NotEndsWith, Present`, serialised as `eq`,
+StartsWith, NotStartsWith, EndsWith, NotEndsWith, Present, In`, serialised as `eq`,
 `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `!contains`, `startsWith`,
-`!startsWith`, `endsWith`, `!endsWith`, `pr`.
+`!startsWith`, `endsWith`, `!endsWith`, `pr`, `in` (`In` from 2.2.1-preview.3, see
+[Set membership](#set-membership-in)).
 
 The vocabulary is audited against **SCIM (RFC 7644 §3.4.2.2)** — the only IETF RFC
 with a formal filter grammar — for its operator set and semantics (`eq`, `ne`,
@@ -264,6 +636,114 @@ disallowed operator is refused:
 ```csharp
 Expression<Func<T, bool>> predicate = node.Compile(fieldMap);
 ```
+
+### Missing values
+
+What "not set" means is fixed once for every evaluator, in memory and in SQL
+alike, and the property tests of `Bsft.Data.Postgres.Tests` hold the two to it:
+
+| Filter | A field that is not set | A field with a value |
+| --- | --- | --- |
+| `{field, eq, null}` (canonical form of "not set") | matches | does not match |
+| `{field, neq, null}`, same as `pr` | does not match | matches |
+| `{field, neq, v}` | matches | matches unless the value is `v` |
+| `{field, eq, v}`, `gt`, `startsWith`, ... | does not match | compares |
+| `{field, in, [v, ...]}` | does not match | matches when the value is one of them |
+
+On a declared nullable column "not set" is `NULL`, and EF Core's C# null semantics
+give `neq v` the `OR col IS NULL` it needs. On a [dynamic field](#dynamic-fields)
+it is whatever the resolver's presence test says is absent; the compiler builds
+the rest of the table from that test, so no resolver can get it wrong.
+
+### Set membership (`in`)
+
+`{"$type": "comparison", "field": "status", "op": "in", "value": ["open", "held"]}`
+matches a row whose field equals one of the values. It means exactly what an
+`or` over one `eq` per element means, in memory and in SQL, and the values are
+always parameters, never literals:
+
+- A field compared without case folding (a non-string, or a string under
+  `FilterStringMatch.Collation`) is sent as one parameterized collection.
+  PostgreSQL (Npgsql) reads it as `= ANY(@p)` on EF Core 9 and 10; SQL Server
+  and SQLite read it as one parameter per value on EF Core 10 (padded to a
+  bucket size), as a JSON array parameter on EF Core 9.
+- A string under the default `FilterStringMatch.LowerInvariant` is compiled as
+  the `or` over `eq` itself, each element folded exactly as `eq` folds its value,
+  so a set matches what `eq` matches under every culture (`"I"` under tr-TR
+  included). As with `eq ""`, `in [""]` matches a `NULL` column in this mode.
+
+Two rules keep it unambiguous:
+
+- **The set is never empty and holds no `null`.** An empty array is a 400 with
+  `errorCode` `FILTER_IN_EMPTY`, a `null` element a 400 with
+  `FILTER_IN_NULL_ELEMENT` (both keyed on `filter`). "Not set" has one spelling,
+  `{field, eq, null}`, combined with `or` where a set should include it. Every
+  evaluator reads the set through `FilterInValues.Read`, so the refusal is the
+  same in memory, in SQL and in the workflow inbox. Either rule can be relaxed
+  later without breaking a client; tightening it could not.
+- **A field accepts `in` only when it names it.** A field declared without
+  `AllowFilter` accepts every other operator, as it always has, but not `in`:
+  `.AllowFilter(FilterOperator.Eq, FilterOperator.In)` opts a field in.
+- **A set is bounded.** One set holds at most 100 values and all sets of one
+  filter together at most 500; beyond either it is a 400 with `errorCode`
+  `FILTER_IN_TOO_MANY`, the limit in the message. The total keeps many small
+  sets from sending what one large set may not. A configuration sets both with
+  `builder.MaxInValues(n)` and `builder.MaxInValuesPerFilter(n)`; the total is
+  bounded in turn by the provider (SQL Server accepts 2100 parameters per
+  command). The limits are checked on the whole filter before anything is built,
+  whichever transport delivered it.
+
+An element of the wrong type for the field (`"abc"` for an `int`) is a 400 too.
+
+## Dynamic fields
+
+Fields that no DTO property declares, such as a tenant's configured extension
+fields, join the same whitelist through a prefix and a resolver:
+
+```csharp
+public override void Configure(QueryConfigurationBuilder<Party, PartyDto> builder)
+{
+    builder.Field(d => d.Name).AllowFilter(FilterOperator.Eq).AllowSort();
+    builder.DynamicFields("custom.", _customFieldResolver);   // IDynamicFieldResolver<Party>
+}
+```
+
+Every filter field and sort field whose name starts with the prefix (matched
+case-insensitively) and is not a declared field is resolved on each request by
+`IDynamicFieldResolver<TEntity>.Resolve(key)`, where `key` is the name without
+the prefix. The resolver answers with a `DynamicField<TEntity>`, or `null` for a
+field it does not know, which is the same 400 an undeclared field is and gives no
+hint that the field exists for someone else. Because the configuration lives for
+the application, a resolver is thread-safe and reads request state (tenant,
+caller) from an ambient accessor. The key is client input as the request spelled it: a
+resolver matches it against its field definitions and never puts it into SQL
+text or a JSON path; where it has to reach the query, it goes in as a value,
+which EF Core sends as a parameter.
+
+A `DynamicField<TEntity>` holds a presence test, one predicate builder per
+positive operator (`eq`, `gt`, `gte`, `lt`, `lte`, `contains`, `startsWith`,
+`endsWith`, `in`) taking the filter value as a `JsonElement`, and an
+optional sort key. The compiler composes the rest, so the
+[missing-value table](#missing-values) holds for every resolver:
+
+- `pr` and `{field, neq, null}` are the presence test, `{field, eq, null}` its negation;
+- a positive operator is `present AND predicate`, so a predicate is only asked
+  about rows that hold a value, and a SQL predicate that yields `NULL` on a
+  missing key cannot leak into the result;
+- a negated operator (`neq`, `!contains`, `!startsWith`, `!endsWith`) is
+  `NOT present OR NOT predicate` of its positive counterpart, and is allowed
+  exactly when that counterpart is;
+- `in` is offered only when the field names it, as a declared field offers it
+  only when `AllowFilter` does. A field whose set membership is plain equality
+  names it with `eqBuilder.ToInPredicate()`, an `or` over its `eq` builder; a
+  field that can test a set in one step (`= ANY`, one containment) supplies its
+  own builder. A resolver with only `eq` answers `in` with a 400.
+
+A declared field whose name starts with a dynamic prefix is refused when the
+configuration is built, and so are two prefixes of which one starts with the
+other. A dynamic field sorts by its sort key; without one, sorting on it is the
+same 400 as on a declared field without `AllowSort()`. The search executor
+filters and sorts through the same field map, so dynamic fields work there too.
 
 ## Multi-tenancy
 
@@ -326,6 +806,27 @@ deriving from `TenantEntity`. Two mechanisms then apply:
   an update that would move a row across tenants, on an insert with no tenant
   resolved, and — **deny by default** — on any update of a tenant-scoped entity
   from a scope with no tenant resolved.
+
+On .NET 10 (EF Core 10) the tenant filter can also be a **named** query filter.
+EF Core 10 refuses to mix an anonymous filter with named ones on one entity type
+(`AnonymousAndNamedFiltersCombined`), so a model that adds a soft-delete or any
+other filter by name applies the tenant filter by name as well:
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    modelBuilder.Entity<Order>().HasQueryFilter("soft-delete", o => !o.IsDeleted);
+    modelBuilder.UseNamedTenantFilter(this);              // named "bsft.tenant"
+    // modelBuilder.UseNamedTenantFilter(this, "tenant"); // or a name of your own
+}
+
+// step around the tenant filter alone; the soft-delete filter still applies
+db.Orders.IgnoreQueryFilters([BsftDbContextOptionsExtensions.TenantFilterName]);
+```
+
+`UseNamedStaticTenantFilter(tenantContext)` is the named form of
+`UseStaticTenantFilter`. `UseTenantFilter(this)` keeps applying the anonymous
+filter it always did.
 
 The interceptor is registered for you, but putting it on the context is the
 host's job, and it is the one omission nothing at runtime reports: reads stay
@@ -486,6 +987,114 @@ them collected reads its own registry and calls the provisioner, which is a job 
 | `DefaultLifetime` | 7 days | How long a sandbox lasts when the caller named none. |
 | `MaxProvisionAttempts` | 5 | How many identifiers to try before failing rather than spinning. |
 
+## Tenant keys
+
+A host that keeps every table of a tenant database tenant-scoped (a non-null
+`TenantId` on every table, a key of a Guid or `(TenantId, Id)`, no identity column) can switch the framework's own
+tables to that shape. The switch is one call per context, in `OnModelCreating`, **before** the framework
+configurations are applied:
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    modelBuilder.UseTenantKeys();                                     // Bsft.Data.MultiTenancy
+
+    modelBuilder.ApplyConfiguration(new AuditOutboxEntityConfiguration("\"DeadLetteredAt\" IS NOT NULL"));
+    modelBuilder.ApplyConfiguration(new AuditLogEntityConfiguration());
+    modelBuilder.ApplyConfiguration(new IdempotencyRecordEntityConfiguration());
+    modelBuilder.ApplyConfiguration(new OutboxMessageEntityConfiguration());
+    modelBuilder.ApplyConfiguration(new InboxMessageEntityConfiguration());
+    // Bsft.Workflow.EFCore and Bsft.FeatureFlags.EFCore: their configurations follow the same switch
+}
+```
+
+and, once per host and required with `UseTenantKeys`, the registration that carries the node id of its ids:
+
+```csharp
+services.AddBsftDataTenantKeys(o => o.NodeId = replicaOrdinal);       // 0..4095, Bsft:Data:TenantKeys:NodeId
+```
+
+`UseTenantKeys` written after a framework configuration throws, naming the entity types already mapped without
+tenant keys, so a late call cannot leave a table behind unnoticed. `UseTenantKeys` without `AddBsftDataTenantKeys` is
+refused at start: a multi-tenancy host (`AddBsftDataMultiTenancy`) with `AddBsftStartupValidation` fails with a
+message naming the context and the missing call. A context that does not call it keeps every table
+exactly as before, and its rows keep their identity `long Id`.
+
+What the switch changes:
+
+| Table | Without `UseTenantKeys` | With `UseTenantKeys` |
+| --- | --- | --- |
+| `AuditLog` | identity `Id`, nullable `TenantId` | key `(TenantId, Id)`, `TenantId` required |
+| `AuditOutbox` | identity `Id`, no `TenantId` | key `(TenantId, Id)`; poll index led by `TenantId` |
+| `IdempotencyRecords` | identity `Id`, unique `(Scope, Key)` | key `(TenantId, Id)`; unique `(TenantId, Scope, Key)`; `(TenantId, ExpiresAt)` |
+| `OutboxMessages` | identity `Id` | key `(TenantId, Id)`; claim index led by `TenantId` |
+| `InboxMessages` | identity `Id`, unique `(Consumer, EventId)` | key `(TenantId, Id)`; unique `(TenantId, Consumer, EventId)` |
+| `WorkItems`, `WorkflowDelegations` | Guid key, nullable `TenantId` | Guid key, `TenantId` required |
+| `WorkflowStepInstances`, `WorkflowAssignments`, `WorkflowDecisions`, `WorkItemComments` | Guid key, no `TenantId`; foreign key to the parent's `Id` | Guid key, `TenantId` required (the work item's); foreign key `(TenantId, <parent>Id)` to the parent's alternate key `(TenantId, Id)` |
+| `FeatureFlags` | Guid key, unique `Key` | Guid key, `TenantId` required; unique `(TenantId, Key)` |
+| `FeatureFlagRules`, `FeatureFlagOverrides` | Guid key, no `TenantId`; foreign key `FlagId` | Guid key, `TenantId` required (the flag's); foreign key `(TenantId, FlagId)` to the flag's alternate key `(TenantId, Id)` |
+| `FeatureFlagChanges` | Guid key, `(FlagKey, OccurredAt)` | Guid key, `TenantId` required; `(TenantId, FlagKey, OccurredAt)` |
+
+`TenantId` is `varchar(128)` wherever it is required. The parents a child table references (`WorkItems`,
+`WorkflowStepInstances`, `WorkflowAssignments`, `FeatureFlags`) get the alternate key `(TenantId, Id)` that the
+composite foreign key points at, so the database refuses a child whose tenant differs from its parent's.
+
+**How a row gets its keys.** The `Id` is filled on `Add` by the registered `ITimeOrderedIdGenerator`
+(`Bsft.Core.Persistence`): 41 bits of milliseconds since 2025-01-01, 12 bits of node id and 10 bits of sequence. One
+generator's values rise strictly, also under parallel calls and when the clock steps back, and more than 1024 values
+in one millisecond carry into the next one, so the ids are ordered by the time they were made in that process. The
+`TenantId` is the writer's where it knows one (an audit event's tenant, a work item's), and otherwise the scope's:
+the resolved `ITenantContext`, or inside a background pass `BackgroundTenant.Current`. A row written in a scope with
+no tenant fails at `Add` instead of being stored without an owner. A child row never takes a tenant of its own: the
+workflow store gives every row of an aggregate the tenant of its work item, the feature-flag store gives rules and
+overrides the tenant of their flag.
+
+**How the stores read it.** Every store reads the decision back from the model (`IsTenantKeyed()` on the entity type
+or the set), so code and schema cannot disagree. Under tenant keys the idempotency store, the inbox store and the
+feature-flag stores put the scope's tenant in every statement and refuse a scope without one, with one exception:
+the flag catalog (`ListAllAsync`) read without a tenant is empty, so the untenanted snapshot and the start check of
+a host without tenant source see no flags rather than failing. A host with tenant-keyed flag tables sets
+`BsftFeatureFlagsOptions.IsSnapshotPerTenant = true`; the outbox dispatchers, sweepers and the audit-log
+retention pass restrict a pass that runs for one tenant to that tenant's rows. A pass without a tenant addresses an
+audit outbox row by `(TenantId, Id)`, holds a messaging outbox claim to the claimed row's tenant, and repeats a
+sweep's expiry condition in its delete, so a row of another tenant that happens to share an id is never touched.
+
+**Several processes.** Ids of one process never collide; ids of processes with different node ids never collide. A
+host that runs several processes against one database gives each its own `NodeId`. With `NodeId` unset each
+process draws a node id at random, which is enough for one process but not a guarantee
+for several. Two processes that share a node id can make the same id in the same millisecond; because the id is
+part of the primary key, the second insert then fails with a key violation, it never overwrites a row. The host
+logs a warning at start when `AddBsftDataTenantKeys` is called without a `NodeId`.
+
+**Restarts.** The sequence counter lives in memory and is not persisted. A process that restarts with the same
+`NodeId` starts again from the clock, so it repeats ids only if its clock now stands at or before the last
+millisecond the previous run used: after the clock was set back, or when the previous run had carried more than 1024
+ids per millisecond into the future (a burst) and the restart came before that lead was used up. Such a repeat fails
+the insert on the primary key, it does not overwrite. Keep the clock synchronised (NTP slews rather than steps) and do
+not move a node id to another process while the old one may still be writing.
+
+**Start-up checks.** A tenant-keyed context must be created in the request's or the pass's scope, because that is
+where its `TenantId` comes from. A context registered with `AddDbContextPool`, `AddDbContextFactory`,
+`AddPooledDbContextFactory` or with options for the lifetime of the application is created from the root provider
+instead and would write rows under whatever tenant the root resolves, which can be another tenant's, without any
+error. `TenantKeyStartupValidator` (registered by `AddBsftDataTenantKeys` only, run by `AddBsftStartupValidation`; it
+reads the lifetime from the registrations and builds only the contexts whose options live for the application) therefore refuses to start a host with such a registration, naming the context; register
+tenant-keyed contexts with `AddDbContext`. `TenantKeyRegistrationStartupValidator` (registered by
+`AddBsftDataMultiTenancy`) refuses a context mapped with `UseTenantKeys` when `AddBsftDataTenantKeys` was not
+called; once it was, the check does nothing. Until then it builds every registered context once at start to read
+its model; a context whose construction throws `InvalidOperationException` or `ArgumentException` is passed without
+a warning, any other exception fails the start. The feature-flag start check reads the stored rules once
+per tenant of the registered `IBackgroundTenantSource` only when the flag store keeps its flags per tenant
+(`IFeatureFlagStore.IsKeptPerTenant`, true under tenant keys) and then names the tenant of every rule type it cannot
+evaluate. Otherwise it reads the catalog once, as without tenant keys, and names each rule once; without a source a
+tenant-keyed catalog read outside a tenant is empty.
+
+**Migrations.** The framework ships no migrations; a host adds them for its own contexts. For a database that is
+created with the switch on, the migration is the plain `CreateTable`. Converting an existing table means adding
+`TenantId`, filling it, making it `NOT NULL`, replacing the primary key and the indexes listed above, and dropping the
+identity (`ALTER TABLE … ALTER COLUMN "Id" DROP IDENTITY` on PostgreSQL); existing ids stay valid, because the ids made
+now are above 2⁵⁷ and therefore larger than any identity value an existing table holds. See migration-2.2.1-preview.2.md.
+
 ## Key comparison
 
 String keys compare **ordinally** — case-sensitive and culture-independent — and
@@ -522,7 +1131,7 @@ different dependency needs:
 
 | Package | Contains | Depends on |
 | --- | --- | --- |
-| `Bsft.Data.Contracts` | `PagedRequest`, `PagedResult<T>`, `SortItem`, `SortDirection`, the filter AST (`FilterNode`, `AndNode`, `OrNode`, `ComparisonNode`, `PresenceNode`, `FilterOperator`), `SearchRequest`, `SearchMode`, `RankedItem<T>` | nothing at all |
+| `Bsft.Data.Contracts` | `PagedRequest`, `PagedResult<T>`, `CursorPagedRequest`, `CursorPagedResult<T>`, `SortItem`, `SortDirection`, the filter AST (`FilterNode`, `AndNode`, `OrNode`, `ComparisonNode`, `PresenceNode`, `FilterOperator`), `SearchRequest`, `SearchMode`, `RankedItem<T>` | nothing at all |
 | `Bsft.Data` | the query executor, the filter compiler, the search pipeline, multi-tenancy, the EF Core extensions | EF Core, EF Core Relational, ASP.NET Core HTTP abstractions, plus the contracts |
 
 The split exists for the client side. A Blazor WebAssembly front end deserialises

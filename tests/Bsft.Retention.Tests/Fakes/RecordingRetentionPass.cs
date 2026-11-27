@@ -16,6 +16,7 @@ namespace Bsft.Retention.Tests.Fakes;
 public sealed class RecordingRetentionPass : IRetentionPass
 {
     private readonly List<(int BatchSize, DateTimeOffset OlderThan)> _calls = [];
+    private readonly TaskCompletionSource _firstCall = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Gets or sets how many records are still waiting to be deleted.</summary>
     public int Backlog { get; set; }
@@ -33,10 +34,15 @@ public sealed class RecordingRetentionPass : IRetentionPass
         }
     }
 
+    /// <summary>Gets a task that completes when the first call has been made.</summary>
+    public Task FirstCall => _firstCall.Task;
+
     public Task<int> PurgeBatchAsync(int batchSize, DateTimeOffset olderThan, CancellationToken ct = default)
     {
         lock (_calls)
             _calls.Add((batchSize, olderThan));
+
+        _firstCall.TrySetResult();
 
         if (Failure is { } failure)
             throw failure;

@@ -2,6 +2,7 @@ using Bsft.Scheduling.Diagnostics;
 using Bsft.Scheduling.Execution;
 using Bsft.Scheduling.Tests.Fakes;
 using Bsft.Scheduling.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -29,14 +30,20 @@ public class JobExecutorTests
         services.AddScoped<CorrelationCapturingJob>();
         services.AddScoped<TokenCapturingJob>();
         services.AddScoped<BlockingJob>();
+        services.AddScoped<ResultRecordingJob>();
         _provider = services.BuildServiceProvider();
 
         _telemetry.BeginExecution(Arg.Any<string>(), Arg.Any<long>(), Arg.Any<int>())
             .Returns(Substitute.For<IJobExecutionTelemetryScope>());
     }
 
-    private JobExecutor CreateExecutor() =>
-        new(_provider.GetRequiredService<IServiceScopeFactory>(), _time, Options.Create(_options), _telemetry);
+    private JobExecutor CreateExecutor(TimeProvider? time = null) =>
+        new(
+            _provider.GetRequiredService<IServiceScopeFactory>(),
+            time ?? _time,
+            Options.Create(_options),
+            _telemetry,
+            new JobRunResultRecorderFactory(Options.Create(_options)));
 
     private static JobRun Run(string? correlationId = null, string? payload = null, DateTimeOffset? leaseExpiresAt = null) => new()
     {
@@ -71,6 +78,27 @@ public class JobExecutorTests
         context.AttemptNumber.Should().Be(2);
         context.CorrelationId.Should().Be("corr-1");
         context.Payload.Should().Be("payload");
+    }
+
+    [Fact]
+    public async Task AResultTheJobRecordsLandsOnTheRunWithinTheConfiguredBound()
+    {
+        _options.MaxResultBytes = 64;
+        var run = Run();
+
+        await CreateExecutor().ExecuteAsync(typeof(ResultRecordingJob), run);
+
+        run.Result.Should().Be(TestRunResults.Of("report/v1", """{"rows":3}"""));
+    }
+
+    [Fact]
+    public async Task AJobThatRecordsNothingLeavesTheRunWithoutAResult()
+    {
+        var run = Run();
+
+        await CreateExecutor().ExecuteAsync(typeof(RecordingJob), run);
+
+        run.Result.Should().BeNull();
     }
 
     [Fact]
@@ -121,13 +149,15 @@ public class JobExecutorTests
         // a fresh LeaseDuration would let the job run past the instant every other instance is allowed
         // to reclaim the run — and execute it a second time in parallel.
         _options.LeaseDuration = TimeSpan.FromSeconds(30);
-        var run = Run(leaseExpiresAt: _now.AddMilliseconds(200));
+        var remaining = TimeSpan.FromMilliseconds(200);
+        var clock = new ManualTimeProvider(_now);
+        var running = CreateExecutor(clock).ExecuteAsync(typeof(BlockingJob), Run(leaseExpiresAt: _now + remaining));
 
-        var act = async () => await CreateExecutor()
-            .ExecuteAsync(typeof(BlockingJob), run)
-            .WaitAsync(TimeSpan.FromSeconds(10));
+        await clock.WaitForTimerAsync(remaining);
+        running.IsCompleted.Should().BeFalse("the job is still inside what is left of the lease");
+        clock.Advance(remaining);
 
-        await act.Should().ThrowAsync<OperationCanceledException>();
+        await running.Invoking(task => task).Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
@@ -145,12 +175,13 @@ public class JobExecutorTests
         // Nothing claimed this run, so there is no lease to stay inside and the configured duration is
         // the only bound there is.
         _options.LeaseDuration = TimeSpan.FromMilliseconds(50);
+        var clock = new ManualTimeProvider(_now);
+        var running = CreateExecutor(clock).ExecuteAsync(typeof(BlockingJob), Run());
 
-        var act = async () => await CreateExecutor()
-            .ExecuteAsync(typeof(BlockingJob), Run())
-            .WaitAsync(TimeSpan.FromSeconds(10));
+        await clock.WaitForTimerAsync(_options.LeaseDuration);
+        clock.Advance(_options.LeaseDuration);
 
-        await act.Should().ThrowAsync<OperationCanceledException>();
+        await running.Invoking(task => task).Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
@@ -169,17 +200,31 @@ public class JobExecutorTests
     {
         var scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
 
-        ((Action)(() => new JobExecutor(null!, _time, Options.Create(_options), _telemetry)))
+        var options = Options.Create(_options);
+        var recorders = new JobRunResultRecorderFactory(options);
+
+        ((Action)(() => new JobExecutor(null!, _time, options, _telemetry, recorders)))
             .Should().Throw<ArgumentNullException>().WithParameterName("scopeFactory");
-        ((Action)(() => new JobExecutor(scopeFactory, null!, Options.Create(_options), _telemetry)))
+        ((Action)(() => new JobExecutor(scopeFactory, null!, options, _telemetry, recorders)))
             .Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
-        ((Action)(() => new JobExecutor(scopeFactory, _time, null!, _telemetry)))
+        ((Action)(() => new JobExecutor(scopeFactory, _time, null!, _telemetry, recorders)))
             .Should().Throw<ArgumentNullException>().WithParameterName("options");
-        ((Action)(() => new JobExecutor(scopeFactory, _time, Options.Create(_options), null!)))
+        ((Action)(() => new JobExecutor(scopeFactory, _time, options, null!, recorders)))
             .Should().Throw<ArgumentNullException>().WithParameterName("telemetry");
+        ((Action)(() => new JobExecutor(scopeFactory, _time, options, _telemetry, null!)))
+            .Should().Throw<ArgumentNullException>().WithParameterName("resultRecorders");
     }
 
     /// <summary>Records whether the token the job was handed was already cancelled when it started.</summary>
+    private sealed class ResultRecordingJob : IJob
+    {
+        public Task ExecuteAsync(JobExecutionContext context, CancellationToken cancellationToken = default)
+        {
+            context.ResultRecorder.Record("report/v1", new { Rows = 3 });
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class TokenCapturingJob : IJob
     {
         public static bool LastSeenCancelled { get; private set; }

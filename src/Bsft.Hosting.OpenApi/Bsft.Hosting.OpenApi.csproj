@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>$(BsftFoundationVersion)</Version>
+    <Description>BSFT Framework OpenAPI and API versioning for ASP.NET Core hosts: Swashbuckle document generation, URL-segment API versioning, and AddBsftDefaults/UseBsftDefaults, which compose them with the Bsft.Hosting defaults.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Bsft.Hosting.OpenApi.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The core host defaults this package composes into AddBsftDefaults/UseBsftDefaults. The arrow points
+         this way so that Bsft.Hosting carries neither Swashbuckle nor Asp.Versioning: a host that pins its
+         own Swashbuckle version can still take CORS, rate limiting and health checks. -->
+    <ProjectReference Include="..\Bsft.Hosting\Bsft.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+    <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" />
+  </ItemGroup>
+</Project>

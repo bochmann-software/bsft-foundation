@@ -23,6 +23,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: nuget
+    # Bsft.Data.Postgres.Tests needs a real server: its fixture fails a CI run without
+    # BSFT_TEST_POSTGRES instead of passing every fact by returning early. A hosted runner reaches the
+    # service's published port on localhost, and the host port is assigned per job, so two jobs on one
+    # runner host do not collide. The server trusts every connection, so no connection string here
+    # carries a password, which the Foundation export refuses to publish.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+        - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     permissions:
       contents: read
       id-token: write   # the OIDC token NuGet/login exchanges; nothing else in the job needs it
@@ -52,6 +69,8 @@ jobs:
     - name: Build
       run: dotnet build Bsft.sln -c Release --nologo
     - name: Test
+      env:
+        BSFT_TEST_POSTGRES: Host=localhost;Port=${{ job.services.postgres.ports['5432'] }};Username=postgres
       run: dotnet test Bsft.sln -c Release --no-build --nologo
     - name: Pack
       run: dotnet pack Bsft.sln -c Release --no-build --nologo -o artifacts

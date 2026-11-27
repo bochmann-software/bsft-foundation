@@ -25,6 +25,25 @@ public sealed class BsftDataOptions
     public MultiTenancyOptions MultiTenancy { get; } = new();
 
     /// <summary>
+    /// Gets how the shared transaction across several contexts is opened, for a host that registered
+    /// one with <c>AddBsftDataSharedTransaction</c>. Get-only for the same reason as
+    /// <see cref="MultiTenancy"/>.
+    /// </summary>
+    public SharedTransactionOptions SharedTransaction { get; } = new();
+
+    /// <summary>
+    /// Gets the node id the time-ordered ids of tenant-keyed tables are made with, for a host that
+    /// registered <c>AddBsftDataTenantKeys</c>. Get-only for the same reason as <see cref="MultiTenancy"/>.
+    /// </summary>
+    public TenantKeyOptions TenantKeys { get; } = new();
+
+    /// <summary>
+    /// Gets the bounds of keyset paging, for a host that registered <c>AddBsftDataKeysetPaging</c>.
+    /// Get-only for the same reason as <see cref="MultiTenancy"/>.
+    /// </summary>
+    public KeysetPagingOptions KeysetPaging { get; } = new();
+
+    /// <summary>
     /// Gets or sets whether the relational model of each relational context type is built as its first
     /// instance initializes, one context type at a time, instead of lazily by its first command.
     /// Defaults to <see langword="true"/>.
@@ -42,6 +61,14 @@ public sealed class BsftDataOptions
     /// <exception cref="InvalidOperationException">Thrown when a configured value cannot be used.</exception>
     internal void Validate()
     {
+        if (TenantKeys.NodeId is { } nodeId && (nodeId < 0 || nodeId > Bsft.Core.Persistence.TimeOrderedIdGenerator.MaxNodeId))
+        {
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{nameof(BsftDataOptions)}.{nameof(TenantKeys)}.{nameof(TenantKeyOptions.NodeId)} must be between 0 and "
+                + $"{Bsft.Core.Persistence.TimeOrderedIdGenerator.MaxNodeId}, but it is '{nodeId}'."));
+        }
+
         if (string.IsNullOrWhiteSpace(MultiTenancy.HeaderName))
             throw Invalid(nameof(MultiTenancy.HeaderName), "must not be blank", MultiTenancy.HeaderName);
 
@@ -58,6 +85,16 @@ public sealed class BsftDataOptions
 
         if (string.IsNullOrWhiteSpace(MultiTenancy.ClaimType))
             throw Invalid(nameof(MultiTenancy.ClaimType), "must not be blank", MultiTenancy.ClaimType);
+
+        // One row beyond the page is read to learn whether another follows, so the largest page has to
+        // leave room for it in Take's int.
+        if (KeysetPaging.MaxPageSize is < 1 or int.MaxValue)
+        {
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{nameof(BsftDataOptions)}.{nameof(KeysetPaging)}.{nameof(KeysetPagingOptions.MaxPageSize)} must be between 1 and "
+                + $"{int.MaxValue - 1}, but it is '{KeysetPaging.MaxPageSize}'."));
+        }
     }
 
     /// <summary>Checks a header name against the token grammar RFC 9110 defines for a field name.</summary>

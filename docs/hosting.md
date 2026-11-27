@@ -4,9 +4,30 @@ The host defaults: Swagger, API versioning, CORS, rate limiting, response
 compression, JSON, HTTPS redirection, health checks, exception handling and
 startup validation — registered by one call and ordered by another.
 
+They come in two packages. `Bsft.Hosting` holds every component except the
+OpenAPI ones, each with its own `AddBsft*` registration (and a `UseBsft*` step
+where it has middleware; the exception middleware is added with
+`UseMiddleware<BsftExceptionMiddleware>()`), and carries no Swashbuckle or
+Asp.Versioning dependency. `Bsft.Hosting.OpenApi` references it
+and adds Swagger (`AddBsftSwagger`, `UseBsftSwagger`), API versioning
+(`AddBsftApiVersioning`) and the two one-call conveniences `AddBsftDefaults` /
+`UseBsftDefaults` below. A host that pins its own Swashbuckle version, to keep a
+generated OpenAPI document byte-identical for one, takes `Bsft.Hosting` alone and
+composes the components it wants; a host that wants the one call takes
+`Bsft.Hosting.OpenApi`. Both are Foundation packages.
+
+The one call lives with the OpenAPI components on purpose: it registers Swagger
+and versioning, so it cannot sit in a package that must not reference them, and a
+Swagger-free variant beside it in `Bsft.Hosting` would be a second composer with
+its own order to keep in step. The price is that a host pinning its own
+Swashbuckle gives up the one call and lists the components itself, in the order
+given under [What the two calls do](#what-the-two-calls-do).
+
 ## Setup
 
 ```csharp
+using Bsft.Hosting.OpenApi.DependencyInjection; // AddBsftDefaults, UseBsftDefaults
+
 builder.Services.AddBsftCorrelation();
 builder.Services.AddBsftDefaults();
 
@@ -25,6 +46,33 @@ if you want to compose the host yourself. That is why every feature keeps its ow
 options type and its own configuration section instead of becoming a group on one
 hosting options type: a host may call `AddBsftCors` alone and never call
 `AddBsftDefaults` at all.
+
+```csharp
+using Bsft.Correlation.DependencyInjection;
+using Bsft.Hosting;                     // BsftExceptionMiddleware
+using Bsft.Hosting.DependencyInjection; // Bsft.Hosting only, no Swashbuckle
+
+builder.Services.AddBsftCorrelation();
+builder.Services.AddBsftHttpsDefaults(builder.Configuration);
+builder.Services.AddBsftCors(builder.Configuration);
+builder.Services.AddBsftRateLimiting(builder.Configuration);
+builder.Services.AddBsftHealthChecks();
+
+var app = builder.Build();
+
+app.UseBsftHttpsRedirection();                // HSTS and the redirect, first
+app.UseBsftCorrelation();
+app.UseMiddleware<BsftExceptionMiddleware>(); // BsftException to ProblemDetails
+app.UseAuthentication();                      // before the limiter, for Principal partitions
+app.UseBsftRateLimiting();
+app.UseBsftCors();
+app.UseBsftHealthChecks();
+```
+
+A hand-composed pipeline gets only what it lists. `UseBsftDefaults` turns HTTPS
+redirection and HSTS on unless `BsftHttpsOptions.RedirectionMode` says otherwise;
+here `UseBsftHttpsRedirection()` has to be called, and left out (or given
+`HttpsRedirectionMode.Disabled`) only by a host whose TLS terminates upstream.
 
 ## What the two calls do
 
@@ -66,6 +114,61 @@ builder.Services.AddProblemDetails(options =>
 The default body — status code, content type and field order — is unchanged for a host that does not register
 `AddProblemDetails`, or that registers it without `CustomizeProblemDetails`. See
 migration-2.2.0.md.
+
+### Mapping your own exceptions
+
+The mapping above is the default. A host adds its own without replacing the middleware: an
+`IBsftExceptionMapper` returns a `BsftExceptionMappingResult` (status, title, detail, extension members,
+response headers such as `Retry-After`, an optional `type`) for an exception it knows and `null` for any
+other. Mappers are registered with `AddBsftExceptionMapper<TMapper>()`, are singletons, are asked in
+registration order, and run **before** the framework's own mapping, so the first result wins and a mapper
+may also override how a framework exception is answered. A mapper must not throw.
+
+```csharp
+builder.Services.AddBsftExceptionMapper<QuotaExceptionMapper>();
+
+sealed class QuotaExceptionMapper : IBsftExceptionMapper
+{
+    public BsftExceptionMappingResult? Map(Exception exception, HttpContext context, string correlationId) =>
+        exception is QuotaExceededException quota
+            ? new BsftExceptionMappingResult(
+                StatusCodes.Status429TooManyRequests, "Too Many Requests", "Quota exhausted.",
+                new Dictionary<string, object> { ["errorCode"] = "QUOTA", ["correlationId"] = correlationId },
+                new Dictionary<string, string> { ["Retry-After"] = quota.RetryAfterSeconds.ToString() })
+            : null;
+}
+```
+
+A mapping with status 500 never carries exception text: its `detail` is always the generic message
+(`An unexpected error occurred. Please use the correlation ID for troubleshooting.`), whoever mapped it,
+and the framework's own 500 never names the exception or its code. A response that must explain itself uses
+another 5xx status, such as 503.
+
+An `IBsftExceptionObserver`, registered with `AddBsftExceptionObserver<TObserver>()`, is told about each
+mapped exception (the exception, the mapping as it is written, the `HttpContext`) after the mapping and
+before the response is written, in registration order, also when the response had already started. It is
+the place for audit and metrics. Observers are singletons on the
+[observer guard](#observers): an observer that throws is reported at warning level and the response is
+unchanged.
+
+### `IExceptionHandler` instead of the middleware
+
+`services.AddBsftExceptionHandler()` registers `BsftExceptionHandlerAdapter`, an ASP.NET Core `IExceptionHandler`
+that runs the same mappers, the same observers and writes the same response. A host that prefers
+`UseExceptionHandler()` to `UseMiddleware<BsftExceptionMiddleware>()` uses it instead (one of the two, not
+both):
+
+```csharp
+builder.Services.AddProblemDetails();       // UseExceptionHandler() without a path needs it
+builder.Services.AddBsftExceptionHandler();
+// ...
+app.UseExceptionHandler();
+```
+
+A request the client aborted is not handled (the handler returns `false`), as the middleware rethrows it.
+The correlation middleware still has to run before it. Nothing changes for a host that does not register
+a mapper, an observer or the handler: the bodies are byte-identical to the middleware's of earlier
+versions.
 
 It does **not** call `UseAuthentication` / `UseAuthorization`. Add those after
 it, either directly or with `UseBsftAuth()` from `Bsft.Auth`:
@@ -122,8 +225,12 @@ builder.Services.AddBsftDefaults(builder.Configuration);
 | `BsftJsonOptions` | `Bsft:Hosting:Json` |
 | `BsftHostLoggingOptions` | `Bsft:Hosting:Logging` |
 | `BsftRateLimitingOptions` | `Bsft:Hosting:RateLimiting` |
+| `BsftSecurityHeadersOptions` | `Bsft:Hosting:SecurityHeaders` |
 | `BsftSwaggerOptions` | `Bsft:Hosting:Swagger` |
 | `BsftVersioningOptions` | `Bsft:Hosting:Versioning` |
+
+The security headers are opt-in and not part of `AddBsftDefaults`: a host calls `AddBsftSecurityHeaders(configuration)`
+itself, which is what binds the `Bsft:Hosting:SecurityHeaders` section.
 
 `BsftHostLoggingOptions` binds `Bsft:Hosting:Logging` and **not** `Bsft:Logging`,
 which belongs to `Bsft.Logging.BsftLoggingOptions`. The two describe different
@@ -146,10 +253,40 @@ to the document.
 
 `BsftCorsOptions` — starts closed. `AllowOrigins(params string[])`,
 `AllowCredentials()` and `AllowAny()` (development only) are the fluent way of
-writing the three settable members `Origins`, `AreCredentialsAllowed` and
-`IsAnyOriginAllowed`, which is what the configuration binder writes. A blank
+writing the settable members `Origins`, `AreCredentialsAllowed` and
+`IsAnyOriginAllowed`. The configuration binder writes these and `ExposedHeaders` and
+`PolicyName`; `OriginPredicate` is the only code-only member. A blank
 origin is rejected on start: it can never match a request, so it is a typo rather
 than a policy.
+`ExposedHeaders` (`ExposeHeaders(params string[])`) lists the response headers a
+browser may read, such as `ETag` or `Location`; it is empty by default and a blank
+entry is rejected on start. `OriginPredicate` (`AllowOriginsWhere(Func<string, bool>)`)
+is set in code only: an origin is allowed when it matches `Origins` (compared the way
+ASP.NET Core compares them: the configured origins are normalised, the request origin
+is compared case-sensitively, and `*` allows all only as the sole entry) or the
+predicate accepts it, and `IsAnyOriginAllowed` still allows everything. A predicate
+combines with `AllowCredentials()` (the allowed origin is echoed back; only the
+wildcard origin is incompatible with credentials). `PolicyName` defaults to
+`HostingDefaults.CorsPolicyName`, `UseBsftCors` applies the configured name, and a
+blank name is rejected on start. `IBsftCorsOriginEvaluator.IsOriginAllowed(origin)`
+returns the policy's decision to code outside CORS (a null, empty or whitespace origin
+is never allowed). The policy installs the evaluator only when a predicate is set or
+the registered evaluator is not the built-in one, so a host evaluator drives CORS
+too (and then replaces the predicate) while the default configuration keeps
+ASP.NET Core's own matching and sends no `Vary: Origin` for a single origin.
+`IsAnyOriginAllowed` bypasses the evaluator: the policy answers `*` without
+consulting it, and so does a `*` entry that is the only entry of `Origins`, which makes
+ASP.NET Core allow every origin before any predicate or evaluator is asked; next to
+other entries `*` is an ordinary entry. The policy captures the evaluator when
+`CorsOptions` is first resolved, so a host evaluator is registered as a singleton; a
+scoped one fails under scope validation. Calling `AddBsftCors` more than once: the policy, the built-in evaluator and the name
+`UseBsftCors` applies all read the options of the last call, one instance, so the
+evaluator matches the policy `UseBsftCors` applies. A policy registered under the
+same name is replaced; one registered under another name by an earlier call stays
+registered and decides by its own call's options (including its own predicate), and
+only a host evaluator is shared by every policy. A later `Configure<BsftCorsOptions>`
+changes none of them (as it never changed the policy); it only reaches code that
+reads `IOptions<BsftCorsOptions>`, which is bound and configured as before.
 
 `BsftRateLimitingOptions` — `PermitLimit` 100, `WindowSeconds` 60; both must be
 at least one, and both are per caller: the window is partitioned on the remote
@@ -212,6 +349,46 @@ The host's own registration is `AddBsftHostLogging(...)`, not `AddBsftLogging` �
 that name belongs to `Bsft.Logging`, and a single `AddBsftLogging` in both
 packages would be an ambiguous call in any file importing both namespaces.
 
+#### Why a default host's providers are a risk on Windows
+
+`Host.CreateApplicationBuilder`, `WebApplication.CreateBuilder` and `Host.CreateDefaultBuilder` register the
+Windows event log provider on Windows. It logs Warning and above (it does not inherit `Logging:LogLevel`), so a
+process whose account may not write to the event log (a service, an application pool, a build agent) fails on its
+first warning or error, which looks intermittent. `Microsoft.Extensions.Logging.Logger` calls every provider and then
+rethrows what they threw as an `AggregateException`, so the exception surfaces in the code that logged: a handler
+that logs a warning and then answers sends a 500 instead of its response, a start that logs its failure reports the
+logging error instead of the failure, a background loop that logs a warning from its catch block can end. The
+framework contains the failure where it owns the response (`BsftExceptionMiddleware` keeps its mapped response), but
+it cannot guard every log call of every package and of your own code.
+
+`AddBsftDefaults` and `AddBsftHostLogging` call `ClearProviders()` and then add the console (and, if enabled, debug
+and file) providers, so a host that uses either is not exposed. A host that composes without them, for example a
+worker built on `Host.CreateApplicationBuilder`, adds `AddBsftHostLogging` (or `AddBsftLogging` from `Bsft.Logging`
+where `Bsft.Hosting` is not referenced) before anything else configures logging, or removes the provider itself with
+`builder.Logging.ClearProviders()`. If you want the event log, add it back behind your own guard.
+
+### Binding a list request in a minimal API
+
+A controller binds `[FromQuery] PagedRequest`; a minimal-API handler takes `PagedQueryParameters` and reads
+`Request`, because minimal APIs have no model binding for a complex query type:
+
+```csharp
+app.MapGet("/api/v1/items", (PagedQueryParameters query, ISender sender) =>
+    sender.SendAsync(new ListItemsQuery(query.Request)));
+```
+
+It reads the keys the MVC binding reads (`page`, `pageSize`, `sort[i].field`, `sort[i].direction`,
+`search.group`, `search.term`, `search.mode`, `search.isOrderedByRank`, `filter`), so one client serves both
+kinds of endpoint. A value that cannot be used is a `ValidationException` keyed on the query key, which the
+exception middleware answers with a 400: a page below 1, a page size outside 1 to
+`BsftFilterTransportOptions.MaxPageSize` (default 100), a page whose first row lies beyond `int.MaxValue`, a
+number that is no number, an unknown sort direction or search mode, more than 16 sort entries, sort entries not
+numbered from 0 without gaps, a key given more than once, and a search without group or term. Without `pageSize`
+the page size is `PagedRequest.DefaultPageSize` (25), or `MaxPageSize` where that is lower. The `filter` goes
+through `IFilterQueryParser` under the transport bounds; the filter transport registration provides it, and an
+endpoint without it fails with a server error on the first request that sends a filter. The entity's query
+configuration may still cap a page lower.
+
 ## Rate limiting
 
 `AddBsftRateLimiting` registers ASP.NET Core's rate limiter with one default policy and any number of named
@@ -252,7 +429,18 @@ The partitions:
   the claim, counts against its client address instead. **Authentication must run before
   `UseBsftRateLimiting`**; `UseBsftDefaults` adds the limiter before anything the host adds after it, so a host
   that calls `UseAuthentication` itself does so before `UseBsftDefaults`, or relies on the minimal hosting
-  model's automatic `UseAuthentication`, which runs first.
+  model's automatic `UseAuthentication`, which runs first. The default claim budgets per authenticated caller;
+  `"ClaimType": "client_id"` (or `"azp"`, whichever claim the issuer writes) budgets per OAuth client instead,
+  so every user of one client shares that client's budget:
+
+  ```json
+  "Bsft": { "Hosting": { "RateLimiting": { "Policies": {
+    "per-client": { "Limiters": [
+      { "Kind": "TokenBucket", "PartitionBy": "Principal", "ClaimType": "client_id", "PermitLimit": 50 } ] }
+  } } } }
+  ```
+
+  A chain can hold both, one limiter per user and one per client, and a request then has to pass each.
 - `Custom` is whatever a selector registered in code returns:
   `o.PartitionKeySelectors["session"] = context => context.User.FindFirst("sid")?.Value;`. A `null` or empty key
   falls back to the client address.
@@ -303,6 +491,46 @@ Validation runs on start and names the configuration path of each offending memb
 limiters, a policy named like the default one, a non-positive limit, window, segment count or token count, a
 negative queue, a principal limiter without a claim type, and a custom limiter naming a selector that is not
 registered.
+
+### Window as a time span, optional default policy, global limiter, key prefix
+
+All four are additive; with none of them configured the registration and every response are what they were.
+
+- **`Window`** (`TimeSpan?`, on `BsftRateLimitingOptions` and on each `PolicyLimiterOptions`) sits next to
+  `WindowSeconds` and binds from strings such as `"00:00:30"`. `null`, the default, uses `WindowSeconds`. When
+  set it takes precedence. Validation fails when it is below one second, and when `WindowSeconds` was changed
+  from its default (60) to a value that disagrees with it; leaving `WindowSeconds` at 60 cannot be told from
+  choosing 60, so `Window` then simply wins. A concurrency limiter ignores both.
+- **`EnableDefaultPolicy`** (default `true`) registers `HostingDefaults.RateLimitingPolicyName`. Set it to
+  `false` when no endpoint asks for that policy; a request for an endpoint that still does fails as for any
+  unknown policy name. The name stays reserved either way.
+- **`GlobalLimiter`** (`PolicyLimiterOptions?`, default `null`, `Bsft:Hosting:RateLimiting:GlobalLimiter`) sets
+  ASP.NET Core's `RateLimiterOptions.GlobalLimiter` from one limiter configured like those of a named policy:
+  every kind, window, queue and partition kind applies. It covers every request before the endpoint policies, so
+  a request is charged against both, and a rejection is answered as any other (counted with `policy` `global`).
+  A host that needs its own key, such as API key, then user, then trusted client address, registers a selector
+  in `PartitionKeySelectors` and names it with `PartitionBy = Custom`; the limiter is disposed with the container.
+  A `GlobalLimiter` a host sets in a later `AddRateLimiter` replaces it.
+- **`CustomPartitionKeyPrefix`** (default `"custom:"`) is prepended to the key a `Custom` selector returns, so
+  that the key cannot share a partition with the `address:` fallback of the same limiter. It is configurable
+  because a host that wants its keys unchanged (for a log or a metric tag) can set it to `""`; the selector then
+  must not return keys that read like `address:...` or `principal:...`. It must not be `null`.
+
+```csharp
+services.AddBsftRateLimiting(o =>
+{
+    o.EnableDefaultPolicy = false;
+    o.CustomPartitionKeyPrefix = "";
+    o.PartitionKeySelectors["caller"] = context => ApiKeyOrUserOrAddress(context);
+    o.GlobalLimiter = new PolicyLimiterOptions
+    {
+        PartitionBy = RateLimitPartitionKind.Custom,
+        PartitionKeySelector = "caller",
+        PermitLimit = 600,
+        Window = TimeSpan.FromMinutes(1)
+    };
+});
+```
 
 ### Rejections
 
@@ -419,6 +647,44 @@ service needs `Microsoft.Extensions.Hosting`. `Bsft.Hosting` already has every o
 of those references through its `Microsoft.AspNetCore.App` framework reference, so
 the base class costs its closure nothing.
 
+### A service that polls
+
+`PollingBackgroundServiceBase` is the base for a hosted service that does one pass of work over and over. The
+derived service writes the pass; the base runs it on the `PollLoop` of the rest of the framework, so a failed
+pass is logged and tried again after the poll interval, a pass cancelled by a token of its own is a failed pass
+and not a shutdown, and only the host stopping ends the service, without an error in the log.
+
+```csharp
+internal sealed class SweepWorker : PollingBackgroundServiceBase
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public SweepWorker(IServiceScopeFactory scopeFactory, TimeProvider timeProvider, ILogger<SweepWorker> logger)
+        : base(logger, timeProvider) => _scopeFactory = scopeFactory;
+
+    protected override TimeSpan PollInterval => TimeSpan.FromSeconds(30);
+
+    protected override async Task<bool> TryTickAsync(CancellationToken cancellationToken)
+    {
+        var swept = await _scopeFactory.RunScopedAsync<IOrderService, int>((orders, ct) => orders.SweepAsync(ct), cancellationToken);
+
+        return swept > 0;
+    }
+}
+
+builder.Services.AddBsftGatedHostedService<SweepWorker>(); // starts after the start gates, like any gated loop
+```
+
+| Member | Means |
+| --- | --- |
+| `PollInterval` (abstract) | The wait after a pass that asked to wait, and after a failed pass. Read once when the service starts. |
+| `TryTickAsync` (abstract) | One pass, in the `Try` shape: `true` (work was done) starts the next pass at once, `false` waits `PollInterval`. |
+| `Enabled` (virtual, default `true`) | `false` ends the service at once with one line in the log; `OnStartingAsync` does not run. |
+| `OnStartingAsync` (virtual) | One-time work before the first pass. A failure is not retried: it faults the service. |
+
+The base maps the pass's `bool` to the `PollPassOutcome` that `PollLoop` takes. The `TimeProvider` is optional and defaults to the system clock; pass the injected one so a
+test drives the interval. The log events (ids 7548 to 7551) use the derived service's own logger category.
+
 ### Running against a scoped service
 
 `RunScopedAsync` on `IServiceScopeFactory` creates a scope, resolves one service
@@ -526,6 +792,70 @@ host, and a tool that has no web host should not have to ship the web API stack 
 package depends on `Bsft.Instrumentation` and `Microsoft.Extensions.Hosting` (for `HostOptions`), which are
 both Foundation or generic-host packages.
 
+## Start gates for hosted loops
+
+A hosted loop starts with the host, in parallel with everything else the host does at start. A worker that
+drains an outbox in the same second the API applies its migrations reads tables in their old shape and fails
+at run time with a missing column. A start gate is the seam for that: a precondition that every framework
+hosted loop that does work waits for, and only then starts.
+
+```csharp
+internal sealed class SchemaGate : IHostedWorkStartGate, IHostedWorkStartGateOverdueSignal
+{
+    public Task WaitAsync(CancellationToken cancellationToken) => /* completes once the schema is current */;
+
+    public bool IsOverdue() => /* pending for longer than expected */;
+}
+
+builder.Services.AddBsftHostedWorkStartGate<SchemaGate>();            // or (sp => sp.GetRequiredService<SchemaGate>())
+builder.Services.AddBsftHealthChecks(health => health.AddHostedWorkStartGates());   // opt-in
+```
+
+`IHostedWorkStartGate` and the optional `IHostedWorkStartGateOverdueSignal` are in `Bsft.Core.Hosting`. The
+registration and the wrapper are in the package `Bsft.Hosting.StartGates`
+(`Bsft.Hosting.StartGates.DependencyInjection`), which references `Bsft.Core` and the generic host's
+abstractions and nothing else.
+
+**The loops do not know about gates.** A loop is a plain hosted service. The framework registers it with
+`AddBsftGatedHostedService<TLoop>()` (or the overload that takes a factory) instead of `AddHostedService`, and the
+container decides when the host starts: with no gate registered it hands the loop itself to the host, so
+nothing differs from `AddHostedService`; with gates it hands a wrapper (`GatedHostedService`). The gates are read
+when the host starts, so it does not matter whether a gate is registered before or after the loops.
+
+- The wrapper is a `BackgroundService` of its own. Its start returns at once, so a pending gate never delays the
+  host's start, and `HostOptions.ServicesStartConcurrently` behaves as it does for any other loop. The loop is
+  started from the wrapper after all gates have opened, in registration order, and it has done nothing at all
+  before that: no pass, no timer, no flush.
+- A fault of the loop surfaces through the wrapper's own `ExecuteTask`, where the host reads it, so
+  `HostOptions.BackgroundServiceExceptionBehavior` applies. A gate that throws faults the wrapper the same way,
+  because running before the precondition holds is what the gate exists to prevent; a gate that has to survive
+  transient failures retries inside `WaitAsync`.
+- A stop while a gate is pending ends the wrapper cleanly and does not call the loop's `StopAsync`: a loop that
+  never started has nothing to stop, and its shutdown work (a final flush, a drain) must not run against a store
+  the gate says is not ready. A loop that has started is stopped as usual, and the host's `StoppingAsync` and
+  `StoppedAsync` reach a loop that implements `IHostedLifecycleService` once it has started; its `StartingAsync` and
+  `StartedAsync` come after the gates.
+- Which loops are gated: the dispatchers, sweepers and workers of the packages that run one (among them the
+  outbox and audit outbox dispatchers, the webhook delivery worker, `JobDispatcher`, `LeasedWorkerHostedService<TPayload>`,
+  `RetentionSweeper<TPass>`, the outbox drain worker and its PostgreSQL wake-up), `RecurringJobSeeder`,
+  `StoredScheduleSeeder`, `SagaTimeoutDispatcher`, `IntegrationEventConsumerHost`, the run-once services of
+  `AddBsftBackgroundWorkRunOnce`, and the two pipeline workers `BatchingWriterWorker<TItem>` and
+  `EnrichmentStageWorker<TItem>`. `RetentionSweeper<TPass>` measures its startup stagger from the moment the gates
+  open, and a run-once service its startup delay.
+- What follows from "never started": `ApiKeyUsageFlusher` writes no final flush when the host stops while the gates
+  are pending, and neither does `BatchingWriterWorker<TItem>` commit anything. The writer's queue is left as it is,
+  so the pipeline's `abandoned` counter does not count the items that never met a writer: that item-level loss is
+  not counted. The host stopping before the gates opened is logged once, as a warning that names the service.
+- Not gated, and said so: hosted services that react to events or run once at start instead of looping
+  (subscribers, publishers, startup validators, bootstrappers such as `S3BucketBootstrapper`) and the
+  `Bsft.Hosting.Local` host-lifetime services. They stay on `AddHostedService`; no list of exceptions exists
+  anywhere, because a service is gated only when it is registered as gated.
+- A loop of your own is gated the same way: register it with `AddBsftGatedHostedService<TLoop>()`. A service you
+  register with `AddHostedService` is never held back.
+- `AddHostedWorkStartGates()` on `BsftHealthCheckConfiguration` adds the `hosted-work-start-gates` check
+  (tag `ready`). It is unhealthy while a registered gate that implements `IHostedWorkStartGateOverdueSignal`
+  says `IsOverdue()`, so a worker stuck waiting is visible instead of silently idle.
+
 ## Startup validation
 
 `AddBsftStartupValidation()` — included in `AddBsftDefaults()` — runs every
@@ -550,6 +880,37 @@ the 1.3 migration notes.
 pipeline built without `AddBsftHttpsDefaults` still redirects: the safe default
 is on.
 
+## Security headers
+
+```csharp
+services.AddBsftSecurityHeaders(configuration);   // optional: binds and validates Bsft:Hosting:SecurityHeaders
+app.UseBsftSecurityHeaders();                      // early, so error responses carry the headers too
+```
+
+The middleware sends a baseline on every response from `OnStarting`, so a response produced further down
+(an exception handler, a 404) carries it as well. A header the endpoint already set is never overwritten, so a
+download served with its own CSP sandbox keeps it. `BsftSecurityHeadersOptions`:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `ContentTypeOptions` | `nosniff` | `X-Content-Type-Options`. |
+| `FrameOptions` | `DENY` | `X-Frame-Options`; `DENY` or `SAMEORIGIN`. |
+| `ReferrerPolicy` | `no-referrer` | `Referrer-Policy`. |
+| `ContentSecurityPolicy` | `frame-ancestors 'none'` | `Content-Security-Policy`. An API host that serves no documents may use `default-src 'none'; frame-ancestors 'none'`. |
+| `PermissionsPolicy` | none | `Permissions-Policy`; the features to switch off depend on what the host serves. |
+| `ContentSecurityPolicyExemptPaths` | empty | Path prefixes (whole segments, starting with `/`) that get no CSP, e.g. `/swagger` for the inline scripts of Swagger UI. The other headers still apply. |
+
+`null` or an empty string for a header member sends no such header. Values with control characters, an unknown
+`FrameOptions` and a path without a leading `/` fail host start. `Strict-Transport-Security` is deliberately not
+here: ASP.NET Core's `UseHsts` (which `UseBsftDefaults` turns on) sends it only on HTTPS requests and skips loopback
+hosts, and `HstsOptions.MaxAge` sets the lifetime. Behind a TLS-terminating edge, put `UseForwardedHeaders` before
+both so `Request.IsHttps` reflects the edge scheme. `UseBsftDefaults` does not add the security headers; a host calls
+`UseBsftSecurityHeaders` itself.
+
+`Bsft.Hosting.ClientApp` writes its own security headers, eagerly, before the response starts, so on a host that
+uses both the ClientApp values win and this middleware only adds the headers that are still absent. See
+hosting-clientapp.md.
+
 ## Observers
 
 `services.AddBsftObservers()` registers what a type that tells several observers about an event needs:
@@ -565,7 +926,8 @@ contract of your own, are in [core.md](core.md#observers).
 ## Constants
 
 `HostingDefaults` holds the names a host may have to spell itself:
-`CorsPolicyName` (`"BsftCorsPolicy"`), `RateLimitingPolicyName`
+`CorsPolicyName` (`"BsftCorsPolicy"`, the default CORS policy name, overridable
+through `BsftCorsOptions.PolicyName`), `RateLimitingPolicyName`
 (`"BsftFixedWindow"`), `RateLimitedErrorCode` (`"RATE_LIMITED"`),
 `RateLimitRejectionsInstrument` (`"bsft.rate_limiting.rejections"`) and
 `ConsoleFormatterName` (`"bsft"`).

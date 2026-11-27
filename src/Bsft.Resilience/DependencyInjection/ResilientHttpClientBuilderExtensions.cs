@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Polly;
+using Polly.Retry;
 
 namespace Bsft.Resilience.DependencyInjection;
 
@@ -77,6 +78,7 @@ public static class ResilientHttpClientBuilderExtensions
             standard.Retry.Delay = options.BaseDelay;
             standard.Retry.BackoffType = DelayBackoffType.Exponential;
             standard.Retry.UseJitter = true;
+            standard.Retry.ShouldHandle = RetryOnlyWhenReplayable(standard.Retry.ShouldHandle);
 
             standard.AttemptTimeout.Timeout = options.AttemptTimeout;
             standard.TotalRequestTimeout.Timeout = options.TotalRequestTimeout;
@@ -89,4 +91,32 @@ public static class ResilientHttpClientBuilderExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// Narrows a retry predicate to requests that are safe to send twice.
+    /// </summary>
+    /// <remarks>
+    /// A retry after a lost response executes the request a second time. RFC 9110 section 9.2.2 calls GET,
+    /// HEAD, OPTIONS and TRACE safe and PUT and DELETE idempotent, so all of them are replayable. POST,
+    /// PATCH and any other method are not, unless the request carries an <c>Idempotency-Key</c> header
+    /// (<see cref="ResilienceDefaults.IdempotencyKeyHeaderName"/>), which makes the server replay the first
+    /// outcome instead of executing again. The default transient-failure predicate still decides what counts
+    /// as a failure; this only adds the method gate, so a consumer that assigns
+    /// <c>HttpRetryStrategyOptions.ShouldHandle</c> on the named options replaces both.
+    /// </remarks>
+    /// <param name="transient">The predicate that decides whether an outcome is a transient failure.</param>
+    /// <returns>A predicate that is true only for a transient failure of a replayable request.</returns>
+    private static Func<RetryPredicateArguments<HttpResponseMessage>, ValueTask<bool>> RetryOnlyWhenReplayable(
+        Func<RetryPredicateArguments<HttpResponseMessage>, ValueTask<bool>> transient)
+        => async args => IsReplayable(args.Context.GetRequestMessage()) && await transient(args).ConfigureAwait(false);
+
+    private static bool IsReplayable(HttpRequestMessage? request)
+        => request is null
+            || request.Method == HttpMethod.Get
+            || request.Method == HttpMethod.Head
+            || request.Method == HttpMethod.Options
+            || request.Method == HttpMethod.Trace
+            || request.Method == HttpMethod.Put
+            || request.Method == HttpMethod.Delete
+            || request.Headers.Contains(ResilienceDefaults.IdempotencyKeyHeaderName);
 }

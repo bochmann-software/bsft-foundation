@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Bsft.Instrumentation.DependencyInjection;
 using Bsft.Scheduling.Diagnostics;
 using Bsft.Scheduling.Execution;
@@ -40,7 +41,7 @@ public static class SchedulingServiceCollectionExtensions
         if (services is null)
             throw new ArgumentNullException(nameof(services));
 
-        return AddCore(services, configure);
+        return AddHostedServices(AddCore(services, configure));
     }
 
     /// <summary>
@@ -66,17 +67,73 @@ public static class SchedulingServiceCollectionExtensions
         if (configuration is null)
             throw new ArgumentNullException(nameof(configuration));
 
-        // Binds Bsft:Scheduling:Jobs:<job name> for whatever jobs are registered, before or after this
-        // call: the jobs come from AddBsftJob and AddBsftRecurringJob, and a module loaded later may
-        // add one, so the binding is by name on demand rather than per registration.
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<BsftJobOptions>>(
-            new JobOptionsConfigurator(configuration)));
+        return AddHostedServices(AddCore(AddJobOptionsBinding(services, configuration), BindSection(configuration, configure)));
+    }
 
-        return AddCore(services, options =>
-        {
-            configuration.GetSection(BsftSchedulingOptions.SectionName).Bind(options);
-            configure?.Invoke(options);
-        });
+    /// <summary>
+    /// Registers the producer side of the job scheduler: the scheduler, the store, the registry and the
+    /// supporting services, with no dispatcher, no seeder and no other hosted service.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <param name="configure">An optional action to configure <see cref="BsftSchedulingOptions"/>.</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// A host that only enqueues registers this instead of <see cref="AddBsftScheduling(IServiceCollection, Action{BsftSchedulingOptions}?)"/>.
+    /// It can call <see cref="IJobScheduler"/> to enqueue and schedule, and it never claims a run, so a run
+    /// whose job only the worker registers is not settled as failed by a host that cannot execute it.
+    /// Register the jobs it enqueues with <see cref="AddBsftJob{TJob}"/>, because the scheduler checks a
+    /// name against the registry; the job is never executed here. Point it at the same stores as the worker:
+    /// <c>AddBsftSchedulingEFCore</c> for the runs and <c>AddBsftStoredSchedulesEFCore</c> for the
+    /// stored-schedule catalog. Both hosts must share both; a producer left on the in-memory catalog creates
+    /// schedules the worker never sees, and nothing reports it.
+    /// </para>
+    /// <para>
+    /// It composes with the full registration in one container in either order and the full registration
+    /// wins: the producer registers a subset of what <c>AddBsftScheduling</c> registers, every service is
+    /// added with <c>TryAdd</c> and the hosted services are added once, so the services and hosted services
+    /// equal those of <c>AddBsftScheduling</c> alone. The options delegates of both calls accumulate and
+    /// run in call order, so the later call wins for a value both set. Neither call is refused.
+    /// </para>
+    /// <para>
+    /// The configuration overload binds <c>Bsft:Scheduling:Jobs:&lt;job name&gt;</c> exactly as the full one does.
+    /// </para>
+    /// </remarks>
+    public static IServiceCollection AddBsftSchedulingProducer(
+        this IServiceCollection services,
+        Action<BsftSchedulingOptions>? configure = null)
+    {
+        if (services is null)
+            throw new ArgumentNullException(nameof(services));
+
+        return AddCore(services, configure);
+    }
+
+    /// <summary>
+    /// Registers the producer side of the job scheduler with its options bound from configuration
+    /// section <see cref="BsftSchedulingOptions.SectionName"/>.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <param name="configuration">The configuration the section is read from.</param>
+    /// <param name="configure">An optional action applied after the section has been bound.</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> or <paramref name="configuration"/> is null.</exception>
+    /// <remarks>
+    /// The section is bound first and the delegate runs after it, so code wins over configuration for
+    /// anything both of them set. Everything the other overload documents applies here as well.
+    /// </remarks>
+    public static IServiceCollection AddBsftSchedulingProducer(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        Action<BsftSchedulingOptions>? configure = null)
+    {
+        if (services is null)
+            throw new ArgumentNullException(nameof(services));
+        if (configuration is null)
+            throw new ArgumentNullException(nameof(configuration));
+
+        return AddCore(AddJobOptionsBinding(services, configuration), BindSection(configuration, configure));
     }
 
     /// <summary>
@@ -149,7 +206,10 @@ public static class SchedulingServiceCollectionExtensions
     /// <remarks>
     /// <para>
     /// Call it after <see cref="AddBsftScheduling(IServiceCollection, Action{BsftSchedulingOptions}?)"/>,
-    /// whose registry, schedules and heartbeat store the check reads. It contributes the registration
+    /// whose registry, schedules and heartbeat store the check reads. It belongs on the host that executes
+    /// jobs: the heartbeats fill only where runs execute, so on a producer-only host
+    /// (<see cref="AddBsftSchedulingProducer(IServiceCollection, Action{BsftSchedulingOptions}?)"/>) it
+    /// would report every recurring job as late. It contributes the registration
     /// to <see cref="HealthCheckServiceOptions"/> directly rather than through <c>AddHealthChecks()</c>,
     /// so a host that never calls that gets the check anyway and one that does picks it up unchanged:
     /// both routes populate the same collection.
@@ -188,7 +248,38 @@ public static class SchedulingServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers everything both entry-point overloads register.
+    /// Binds <c>Bsft:Scheduling:Jobs:&lt;job name&gt;</c> for whatever jobs are registered, before or after
+    /// this call: the jobs come from <c>AddBsftJob</c> and <c>AddBsftRecurringJob</c>, and a module loaded
+    /// later may add one, so the binding is by name on demand rather than per registration.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <param name="configuration">The configuration the per-job sections are read from.</param>
+    /// <returns>The service collection for chaining.</returns>
+    private static IServiceCollection AddJobOptionsBinding(IServiceCollection services, IConfiguration configuration)
+    {
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<BsftJobOptions>>(
+            new JobOptionsConfigurator(configuration)));
+
+        return services;
+    }
+
+    /// <summary>
+    /// Builds the options action that binds the configuration section and then applies the delegate.
+    /// </summary>
+    /// <param name="configuration">The configuration the section is read from.</param>
+    /// <param name="configure">An optional action applied after the section has been bound.</param>
+    /// <returns>The action that shapes the options.</returns>
+    private static Action<BsftSchedulingOptions> BindSection(
+        IConfiguration configuration,
+        Action<BsftSchedulingOptions>? configure) =>
+        options =>
+        {
+            configuration.GetSection(BsftSchedulingOptions.SectionName).Bind(options);
+            configure?.Invoke(options);
+        };
+
+    /// <summary>
+    /// Registers everything every entry-point overload registers: all services and no hosted service.
     /// </summary>
     /// <param name="services">The service collection to add to.</param>
     /// <param name="configure">What shapes the options, whatever it was built from.</param>
@@ -232,15 +323,26 @@ public static class SchedulingServiceCollectionExtensions
         // Per instance and in memory: what this process has seen since it started. Replaceable, which
         // is the seam a host uses to answer liveness from the run store instead.
         services.TryAddSingleton<IJobHeartbeatStore, InMemoryJobHeartbeatStore>();
+        services.TryAddSingleton<IJobRunResultRecorderFactory, JobRunResultRecorderFactory>();
         services.TryAddSingleton<IJobExecutor, JobExecutor>();
         services.TryAddSingleton<IRecurringJobPlanner, RecurringJobPlanner>();
         services.TryAddSingleton<IJobRunOutcomePolicy, JobRunOutcomePolicy>();
         services.TryAddSingleton<IJobRunner, JobRunner>();
         services.TryAddScoped<IJobScheduler, JobScheduler>();
 
-        services.AddHostedService<RecurringJobSeeder>();
-        services.AddHostedService<StoredScheduleSeeder>();
-        services.AddHostedService<JobDispatcher>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the seeders and the dispatcher, the part only a host that executes runs needs.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <returns>The service collection for chaining.</returns>
+    private static IServiceCollection AddHostedServices(IServiceCollection services)
+    {
+        services.AddBsftGatedHostedService<RecurringJobSeeder>();
+        services.AddBsftGatedHostedService<StoredScheduleSeeder>();
+        services.AddBsftGatedHostedService<JobDispatcher>();
 
         return services;
     }

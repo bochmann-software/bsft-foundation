@@ -31,6 +31,9 @@ public sealed class BsftFilterTransportOptions
     /// <summary>The default ceiling on the total number of nodes in the filter AST.</summary>
     public const int DefaultMaxNodeCount = 200;
 
+    /// <summary>The default ceiling on the <c>pageSize</c> query value of a minimal-API list endpoint.</summary>
+    public const int DefaultMaxPageSize = 100;
+
     /// <summary>
     /// Gets or sets the maximum length, in characters, of the raw <c>filter</c> query value. A longer
     /// value is rejected before any JSON is parsed, so an oversized string never reaches the
@@ -57,9 +60,20 @@ public sealed class BsftFilterTransportOptions
     /// <summary>
     /// Gets or sets the maximum total number of nodes in the filter AST. A broad-but-shallow filter
     /// with more nodes than this is rejected before it is compiled, bounding the size of the
-    /// expression tree the compiler builds. Defaults to <see cref="DefaultMaxNodeCount"/>.
+    /// expression tree the compiler builds. An <c>in</c> comparison counts as one node however many
+    /// values its set holds; the values are bounded by the query configuration instead
+    /// (<c>MaxInValues</c>, <c>MaxInValuesPerFilter</c>), which the compiler checks for every transport.
+    /// Defaults to <see cref="DefaultMaxNodeCount"/>.
     /// </summary>
     public int MaxNodeCount { get; set; } = DefaultMaxNodeCount;
+
+    /// <summary>
+    /// Gets or sets the largest <c>pageSize</c> a list endpoint that binds <see cref="PagedQueryParameters"/>
+    /// accepts; a larger one is a 400. A transport bound only: the entity's own query configuration may cap a
+    /// page lower. The MVC binding of <c>[FromQuery] PagedRequest</c> is not affected. Defaults to
+    /// <see cref="DefaultMaxPageSize"/>.
+    /// </summary>
+    public int MaxPageSize { get; set; } = DefaultMaxPageSize;
 
     /// <summary>
     /// Validates the options.
@@ -71,6 +85,7 @@ public sealed class BsftFilterTransportOptions
         RequirePositive(MaxJsonReaderDepth, nameof(MaxJsonReaderDepth));
         RequirePositive(MaxDepth, nameof(MaxDepth));
         RequirePositive(MaxNodeCount, nameof(MaxNodeCount));
+        RequirePositive(MaxPageSize, nameof(MaxPageSize));
 
         if (MaxJsonReaderDepth < MaxDepth)
             throw Invalid(

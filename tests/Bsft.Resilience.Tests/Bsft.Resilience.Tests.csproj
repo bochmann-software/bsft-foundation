@@ -7,6 +7,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Bsft.Resilience\Bsft.Resilience.csproj" />
+    <!-- Only to pin the mirrored Idempotency-Key header name to the one the receiving half reads. -->
+    <ProjectReference Include="..\..\src\Bsft.Idempotency\Bsft.Idempotency.csproj" />
   </ItemGroup>
 
   <ItemGroup>

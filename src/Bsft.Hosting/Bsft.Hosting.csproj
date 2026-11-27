@@ -1,11 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Version>$(BsftFoundationVersion)</Version>
-    <Description>BSFT Framework hosting defaults, health checks, and startup validation</Description>
+    <Description>BSFT Framework hosting defaults for ASP.NET Core: CORS, rate limiting, response compression, JSON, HTTPS redirection, health checks, the exception middleware, host logging and startup validation. No Swashbuckle or API-versioning dependency; OpenAPI, versioning and AddBsftDefaults are in Bsft.Hosting.OpenApi.</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Bsft.Hosting.Tests" />
+    <!-- AddBsftDefaults in Bsft.Hosting.OpenApi composes each component through its internal Add, the one
+         place that binds the component's section and applies its delegate. -->
+    <InternalsVisibleTo Include="Bsft.Hosting.OpenApi" />
   </ItemGroup>
 
   <ItemGroup>
@@ -23,9 +26,10 @@
     <ProjectReference Include="..\Bsft.Logging\Bsft.Logging.csproj" />
   </ItemGroup>
 
+  <!-- No Swashbuckle and no Asp.Versioning: OpenAPI, API versioning and AddBsftDefaults, which composes them,
+       live in Bsft.Hosting.OpenApi, so a host that pins its own Swashbuckle can still take this package.
+       DependencyClosureTests pins it. -->
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="Swashbuckle.AspNetCore" />
-    <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" />
   </ItemGroup>
 </Project>

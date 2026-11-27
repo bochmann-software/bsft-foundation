@@ -23,6 +23,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Bsft.Data.Postgres.Tests needs a real server: its fixture fails a CI run without
+    # BSFT_TEST_POSTGRES instead of passing every fact by returning early. A hosted runner reaches the
+    # service's published port on localhost, and the host port is assigned per job, so two jobs on one
+    # runner host do not collide. The server trusts every connection, so no connection string here
+    # carries a password, which the Foundation export refuses to publish.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+        - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
     - uses: actions/checkout@v7
     - uses: actions/setup-dotnet@v6
@@ -61,6 +78,8 @@ jobs:
         echo "list=${frameworks//;/ }" >> "$GITHUB_OUTPUT"
 
     - name: Test with coverage, per framework
+      env:
+        BSFT_TEST_POSTGRES: Host=localhost;Port=${{ job.services.postgres.ports['5432'] }};Username=postgres
       run: |
         set -euo pipefail
         for tfm in ${{ steps.frameworks.outputs.list }}; do

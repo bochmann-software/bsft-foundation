@@ -1,10 +1,15 @@
+using Bsft.Core.Tenancy;
 using Bsft.Idempotency.DependencyInjection;
 using Bsft.Idempotency.EFCore.DependencyInjection;
+using Bsft.Idempotency.EFCore.Tests.Fakes;
 using Bsft.Idempotency.EFCore.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Bsft.Idempotency.EFCore.Tests.DependencyInjection;
@@ -148,6 +153,64 @@ public sealed class IdempotencyEFCoreServiceCollectionExtensionsTests
     public void The_registration_is_chainable() =>
         Services().AddBsftIdempotencyEFCore<TestIdempotencyDbContext>()
             .Should().BeAssignableTo<IServiceCollection>();
+
+    [Fact]
+    public async Task AddBsftIdempotencyEFCore_WithABackgroundTenantSource_IdempotencyRecordSweeperSweepsOncePerTenant()
+    {
+        var recorder = new TenantRecorder<IIdempotencyDbContext>();
+        var services = Services();
+        services.AddBsftIdempotency();
+        services.AddBsftIdempotencyEFCore<TestIdempotencyDbContext>();
+        services.AddSingleton<IBackgroundTenantSource>(new FakeBackgroundTenantSource(["a", "b"]));
+        // The sweeper resolves its context from the scope of each pass; recording here shows whom it swept for.
+        services.Replace(ServiceDescriptor.Scoped<IIdempotencyDbContext>(_ => recorder.Record()));
+
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        services.AddSingleton<TimeProvider>(clock);
+
+        using var provider = services.BuildServiceProvider();
+        var sweeper = provider.GetServices<IHostedService>().OfType<IdempotencyRecordSweeper>().Single();
+
+        var openedFor = await RunFirstPassAsync(sweeper.RunLoopAsync, recorder, clock);
+
+        openedFor.Take(2).Should().Equal("a", "b");
+    }
+
+    [Fact]
+    public async Task AddBsftIdempotencyEFCore_WithoutABackgroundTenantSource_IdempotencyRecordSweeperSweepsWithoutATenant()
+    {
+        var recorder = new TenantRecorder<IIdempotencyDbContext>();
+        var services = Services();
+        services.AddBsftIdempotency();
+        services.AddBsftIdempotencyEFCore<TestIdempotencyDbContext>();
+        // The sweeper resolves its context from the scope of each pass; recording here shows whom it swept for.
+        services.Replace(ServiceDescriptor.Scoped<IIdempotencyDbContext>(_ => recorder.Record()));
+
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        services.AddSingleton<TimeProvider>(clock);
+
+        using var provider = services.BuildServiceProvider();
+        var sweeper = provider.GetServices<IHostedService>().OfType<IdempotencyRecordSweeper>().Single();
+
+        var openedFor = await RunFirstPassAsync(sweeper.RunLoopAsync, recorder, clock);
+
+        openedFor.Should().NotBeEmpty().And.OnlyContain(tenant => tenant == null);
+    }
+
+    private static async Task<IReadOnlyList<string?>> RunFirstPassAsync(
+        Func<CancellationToken, Task> run, TenantRecorder<IIdempotencyDbContext> recorder, ManualTimeProvider clock)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var loop = run(cts.Token);
+
+        // The first pass is complete once the loop waits out its interval on the manual clock.
+        await await Task.WhenAny(clock.WaitForAnyTimerAsync(), loop).ConfigureAwait(false);
+
+        await cts.CancelAsync();
+        await loop.ConfigureAwait(false);
+
+        return recorder.ResolvedFor;
+    }
 
     [Fact]
     public void A_missing_service_collection_is_rejected()

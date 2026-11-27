@@ -2,6 +2,7 @@ using Bsft.EventAggregator.Saga.Diagnostics;
 using Bsft.EventAggregator.Saga.Tests.Support;
 using Bsft.Instrumentation;
 using Bsft.Instrumentation.DependencyInjection;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -11,6 +12,7 @@ namespace Bsft.EventAggregator.Saga.Tests.Diagnostics;
 public sealed class SagaTelemetryTests : IDisposable
 {
     private readonly ServiceProvider _provider;
+    private readonly ManualTimestampProvider _clock = new();
     private readonly SagaTelemetry _telemetry;
 
     public SagaTelemetryTests()
@@ -18,14 +20,21 @@ public sealed class SagaTelemetryTests : IDisposable
         _provider = new ServiceCollection()
             .AddBsftInstrumentationSource(SagaTelemetry.SourceName)
             .BuildServiceProvider();
-        _telemetry = new SagaTelemetry(_provider.GetRequiredService<IInstrumentationSourceProvider>());
+        _telemetry = new SagaTelemetry(_provider.GetRequiredService<IInstrumentationSourceProvider>(), _clock);
     }
 
     [Fact]
     public void Constructor_NullProvider_Throws()
     {
-        var act = () => new SagaTelemetry(null!);
+        var act = () => new SagaTelemetry(null!, _clock);
         act.Should().Throw<ArgumentNullException>().WithParameterName("sources");
+    }
+
+    [Fact]
+    public void Constructor_NullClock_Throws()
+    {
+        var act = () => new SagaTelemetry(_provider.GetRequiredService<IInstrumentationSourceProvider>(), null!);
+        act.Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
     }
 
     [Fact]
@@ -103,8 +112,27 @@ public sealed class SagaTelemetryTests : IDisposable
     [Fact]
     public void StepScope_NullTelemetry_Throws()
     {
-        var act = () => new SagaStepTelemetryScope(null!, null, "OrderSaga");
+        var act = () => new SagaStepTelemetryScope(null!, _clock, null, "OrderSaga");
         act.Should().Throw<ArgumentNullException>().WithParameterName("telemetry");
+    }
+
+    [Fact]
+    public void StepScope_NullClock_Throws()
+    {
+        var act = () => new SagaStepTelemetryScope(_telemetry, null!, null, "OrderSaga");
+        act.Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
+    }
+
+    [Fact]
+    public void StepScope_Dispose_RecordsTheDurationTheInjectedClockMeasured()
+    {
+        using var capture = new SagaTelemetryCapture(SagaTelemetry.SourceName);
+
+        using (_telemetry.BeginStep("OrderSaga", "order-1", 0))
+            _clock.Advance(TimeSpan.FromSeconds(2));
+
+        capture.Measurements.Should().ContainSingle(m => m.Instrument == "bsft.saga.step.duration")
+            .Which.Value.Should().Be(2);
     }
 
     [Fact]

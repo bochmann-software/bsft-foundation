@@ -86,6 +86,8 @@ public static class ResilienceMediatorServiceCollectionExtensions
         services.AddSingleton<IMediatorResiliencePipelineProvider, MediatorResiliencePipelineProvider>();
         services.TryAddEnumerable(
             ServiceDescriptor.Transient(typeof(IPipelineBehavior<,>), typeof(RetryBehavior<,>)));
+        services.TryAddEnumerable(
+            ServiceDescriptor.Transient<Bsft.Core.IStartupValidator, ResilienceMediatorStartupValidator>());
 
         return services;
     }

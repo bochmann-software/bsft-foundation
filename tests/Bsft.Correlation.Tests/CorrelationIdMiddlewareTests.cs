@@ -22,20 +22,45 @@ public class CorrelationIdMiddlewareTests
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData("\u00e9")]
+    [InlineData("\u0661")]
+    [InlineData("has\0nul")]
     [InlineData("has spaces")]
     [InlineData("has\r\nboth")]
     [InlineData("trailing-newline\n")]
     [InlineData("trailing-return\r")]
     public async Task AHeaderCarryingAnythingElse_IsReplacedRatherThanEchoed(string header)
     {
-        // The trailing newline is the reason the pattern ends in \z: $ also matches just before a
-        // single closing newline, so a value ending in one would otherwise reach the response header
-        // and the log scope and forge a line in both. The carriage return guards the neighbouring
-        // character, which $ already refused.
         var stamped = await RunAsync(header);
 
         stamped.Should().NotBe(header);
         Guid.TryParse(stamped, out _).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(128, true)]
+    [InlineData(129, false)]
+    public async Task HeaderLength_IsBounded(int length, bool accepted)
+    {
+        var header = new string('a', length);
+        var stamped = await RunAsync(header);
+        (stamped == header).Should().Be(accepted);
+        if (!accepted)
+            Guid.TryParse(stamped, out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task EveryAsciiCharacter_IsCheckedAgainstTheExactAlphabet()
+    {
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
+        for (var value = 0; value < 128; value++)
+        {
+            var character = (char)value;
+            var stamped = await RunAsync("a" + character);
+            (stamped == "a" + character).Should().Be(alphabet.Contains(character), "ASCII value {0}", value);
+        }
     }
 
     [Fact]

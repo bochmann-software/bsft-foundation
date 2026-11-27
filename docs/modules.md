@@ -59,6 +59,7 @@ part of it.
 | Method | Meaning |
 | --- | --- |
 | `Add<TModule>()` | A module compiled into the application. |
+| `Add(Type)` | The same for a type known only at run time, e.g. from a list of module descriptors. The type is checked at the call: a concrete, non-generic class implementing `IModule` with a public parameterless constructor, otherwise `ArgumentException`. |
 | `FromConfigurationFile(path)` | A JSON manifest listing modules and their assemblies. |
 | `FromDirectory(path)` | Scan a directory of assemblies for `IModule` implementations. |
 

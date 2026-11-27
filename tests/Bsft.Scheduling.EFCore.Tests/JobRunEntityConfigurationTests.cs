@@ -146,6 +146,8 @@ public class JobRunEntityConfigurationTests : IDisposable
         entityType.FindProperty(nameof(JobRunEntity.JobName))!.GetMaxLength().Should().Be(500);
         entityType.FindProperty(nameof(JobRunEntity.LeaseOwner))!.GetMaxLength().Should().Be(200);
         entityType.FindProperty(nameof(JobRunEntity.CorrelationId))!.GetMaxLength().Should().Be(200);
+        entityType.FindProperty(nameof(JobRunEntity.ResultSchema))!.GetMaxLength().Should().Be(JobRunResult.MaxSchemaLength);
+        entityType.FindProperty(nameof(JobRunEntity.Result))!.GetMaxLength().Should().BeNull();
         entityType.FindProperty(nameof(JobRunEntity.ConcurrencyToken))!.IsConcurrencyToken.Should().BeTrue();
     }
 

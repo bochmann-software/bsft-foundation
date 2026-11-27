@@ -98,6 +98,11 @@ public static class IdempotencyServiceCollectionExtensions
         services.TryAddSingleton<IdempotencyRegistrationMarker>();
         services.TryAddSingleton<IIdempotencyTelemetry, IdempotencyTelemetry>();
 
+        // The sealing of a sensitive response (SensitiveIdempotentResponseAttribute). AddDataProtection only
+        // adds what is missing, so a host that configured its key ring, or Bsft.Security that did, keeps it.
+        services.AddDataProtection();
+        services.TryAddSingleton<IIdempotencyResponseProtector, IdempotencyResponseProtector>();
+
         AddSeams(services);
 
         return services;

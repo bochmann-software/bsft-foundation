@@ -1,4 +1,5 @@
 using Bsft.Logging.LogFiles;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -26,6 +27,43 @@ public static class LoggingBuilderExtensions
 
         AddBsftFileServices(builder.Services, configure);
         return AddBsftFileLoggerProvider(builder, configure);
+    }
+
+    /// <summary>
+    /// Adds the BSFT file logger provider when the given configuration section asks for it, leaving
+    /// the console and every other provider untouched.
+    /// </summary>
+    /// <param name="builder">The logging builder.</param>
+    /// <param name="section">
+    /// The section carrying the <see cref="BsftLoggingOptions"/> values, normally the
+    /// <c>Bsft:Logging</c> section (<see cref="BsftLoggingOptions.SectionName"/>). A missing or empty
+    /// section adds nothing.
+    /// </param>
+    /// <returns>The logging builder for chaining.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="builder"/> or <paramref name="section"/> is null.
+    /// </exception>
+    /// <remarks>
+    /// The provider is added only when the bound <see cref="BsftLoggingOptions.EnableFileLogging"/> is
+    /// <see langword="true"/>. The options are validated on start, as the other entry points do, so an
+    /// unusable value fails when the host starts and not on the first log call.
+    /// </remarks>
+    public static ILoggingBuilder AddBsftFileLogger(
+        this ILoggingBuilder builder,
+        IConfiguration section)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(section);
+
+        if (!section.GetChildren().Any())
+            return builder;
+
+        void Apply(BsftLoggingOptions target) => section.Bind(target);
+
+        var options = new BsftLoggingOptions();
+        Apply(options);
+
+        return options.EnableFileLogging ? AddBsftFileLogger(builder, Apply) : builder;
     }
 
     /// <summary>Registers the file reader and its shared dependencies for either public entry point.</summary>
@@ -66,7 +104,7 @@ public static class LoggingBuilderExtensions
         // is a background thread and dies with the process.
         builder.Services.AddSingleton<ILoggerProvider>(provider => new BsftFileLoggerProvider(
             options,
-            provider.GetService<TimeProvider>(),
+            provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<ILogFileNaming>()));
 
         return builder;

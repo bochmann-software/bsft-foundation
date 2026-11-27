@@ -1,3 +1,4 @@
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Bsft.Messaging.EFCore.Inbox;
 using Bsft.Messaging.EFCore.Outbox;
 using Bsft.Messaging.Inbox;
@@ -85,7 +86,7 @@ public static class MessagingEFCoreServiceCollectionExtensions
         // there is no retention to have been set, and the pruner leaves at once.
         services.AddOptions<BsftMessagingOptions>().ValidateOnStart();
 
-        services.AddHostedService<InboxSweeper>();
+        services.AddBsftGatedHostedService<InboxSweeper>();
 
         return services;
     }
@@ -115,10 +116,17 @@ public static class MessagingEFCoreServiceCollectionExtensions
         // rows live in and how one of them reads as an integration event.
         services
             .TryAddSingleton<IOutboxRowSource<OutboxMessageEntity, IntegrationEventMessage>, OutboxMessageRowSource>();
+        // With a tenant scope factory the store opens a tenant pass's scopes through it, so a host that binds a
+        // tenant's database only there drains that database.
         services.TryAddSingleton<Bsft.Outbox.IOutboxStore<IntegrationEventMessage>>(sp =>
-            new global::Bsft.Outbox.EFCore.EFCoreOutboxStore<OutboxMessageEntity, IntegrationEventMessage>(
-                sp.GetRequiredService<IServiceScopeFactory>(),
-                sp.GetRequiredService<IOutboxRowSource<OutboxMessageEntity, IntegrationEventMessage>>()));
+            sp.GetService<Bsft.Core.Tenancy.ITenantScopeFactory>() is { } tenantScopes
+                ? new global::Bsft.Outbox.EFCore.EFCoreOutboxStore<OutboxMessageEntity, IntegrationEventMessage>(
+                    sp.GetRequiredService<IServiceScopeFactory>(),
+                    sp.GetRequiredService<IOutboxRowSource<OutboxMessageEntity, IntegrationEventMessage>>(),
+                    tenantScopes)
+                : new global::Bsft.Outbox.EFCore.EFCoreOutboxStore<OutboxMessageEntity, IntegrationEventMessage>(
+                    sp.GetRequiredService<IServiceScopeFactory>(),
+                    sp.GetRequiredService<IOutboxRowSource<OutboxMessageEntity, IntegrationEventMessage>>()));
         services.TryAddSingleton<IOutboxStore, EFCoreOutboxStore>();
 
         services.AddOptions<BsftMessagingOptions>()
@@ -129,9 +137,10 @@ public static class MessagingEFCoreServiceCollectionExtensions
         // on-demand drain through IOutboxProcessor goes through the same instance, so a test drains
         // the messages the application would have published rather than a second dispatcher over the
         // same outbox.
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<OutboxDispatcher>();
         services.AddSingleton<IOutboxProcessor>(sp => sp.GetRequiredService<OutboxDispatcher>());
-        services.AddHostedService(sp => sp.GetRequiredService<OutboxDispatcher>());
+        services.AddBsftGatedHostedService<OutboxDispatcher>();
 
         return services;
     }

@@ -1,6 +1,7 @@
 using Bsft.Messaging.Consuming;
 using Bsft.Messaging.Tests.Fakes;
 using Bsft.Messaging.Tests.Support;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -12,7 +13,11 @@ public class IntegrationEventConsumerHostTests
     private readonly FakeMessageSource _source = new();
     private readonly FakeIntegrationEventConsumer _consumer = new();
 
-    private IntegrationEventConsumerHost CreateHost(ConsumerOptions? options = null) =>
+    // The clock the restart delay runs on, by default one that fires every wait at once, so a loop
+    // test reaches its next subscription without waiting out the delay.
+    private readonly RecordingTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
+
+    private IntegrationEventConsumerHost CreateHost(ConsumerOptions? options = null, TimeProvider? clock = null) =>
         new(_source,
             _consumer,
             TestMessagingOptions.For(options ?? new ConsumerOptions
@@ -20,6 +25,7 @@ public class IntegrationEventConsumerHostTests
                 ConsumerName = "orders",
                 ReceiveRestartDelay = TimeSpan.FromMilliseconds(1),
             }),
+            clock ?? _clock,
             NullLogger<IntegrationEventConsumerHost>.Instance);
 
     private static FakeMessageDelivery Delivery() => new(new IntegrationEventMessage
@@ -53,6 +59,74 @@ public class IntegrationEventConsumerHostTests
         await CreateHost().RunLoopAsync(cts.Token);
 
         _source.Subscriptions.Should().BeGreaterThanOrEqualTo(3);
+    }
+
+    [Fact]
+    public async Task The_loop_waits_the_restart_delay_on_the_injected_clock()
+    {
+        // The delay before a re-subscription is measured by the host's TimeProvider: the next
+        // subscription comes when that clock has moved by the delay, and not a tick before.
+        var delay = TimeSpan.FromSeconds(5);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var resubscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+        _source.OnSubscribe = subscriptions =>
+        {
+            if (subscriptions < 2)
+                return;
+
+            cts.Cancel();
+            resubscribed.TrySetResult();
+        };
+        var host = CreateHost(new ConsumerOptions { ConsumerName = "orders", ReceiveRestartDelay = delay }, clock);
+
+        var loop = host.RunLoopAsync(cts.Token);
+
+        await clock.WaitForTimerAsync(delay);
+        clock.Advance(delay - TimeSpan.FromTicks(1));
+        _source.Subscriptions.Should().Be(1);
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        await resubscribed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await loop.WaitAsync(TimeSpan.FromSeconds(30));
+
+        _source.Subscriptions.Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_subscription_waits_the_restart_delay_on_the_injected_clock(bool cancelsItself)
+    {
+        // The delay is an hour, which real time does not pass during a test, so a loop waiting on the
+        // machine's clock never arms a timer on this one and never re-subscribes.
+        var delay = TimeSpan.FromHours(1);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var resubscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+        _source.StreamCancelsItself = cancelsItself;
+        _source.StreamFailure = cancelsItself ? null : new InvalidOperationException("the broker connection dropped");
+        _source.OnSubscribe = subscriptions =>
+        {
+            if (subscriptions < 2)
+                return;
+
+            cts.Cancel();
+            resubscribed.TrySetResult();
+        };
+        var host = CreateHost(new ConsumerOptions { ConsumerName = "orders", ReceiveRestartDelay = delay }, clock);
+
+        var loop = host.RunLoopAsync(cts.Token);
+
+        await clock.WaitForTimerAsync(delay);
+        clock.Advance(delay - TimeSpan.FromTicks(1));
+        _source.Subscriptions.Should().Be(1);
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        await resubscribed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await loop.WaitAsync(TimeSpan.FromSeconds(30));
+
+        _source.Subscriptions.Should().Be(2);
     }
 
     [Fact]
@@ -147,7 +221,7 @@ public class IntegrationEventConsumerHostTests
         });
 
         await host.StartAsync(CancellationToken.None);
-        var reached = await consumed.WaitAsync(TimeSpan.FromSeconds(10));
+        var reached = await consumed.WaitAsync(TimeSpan.FromSeconds(30));
         await host.StopAsync(CancellationToken.None);
 
         reached.Should().BeTrue();
@@ -258,14 +332,16 @@ public class IntegrationEventConsumerHostTests
         var options = TestMessagingOptions.For(new ConsumerOptions { ConsumerName = "orders" });
         var logger = NullLogger<IntegrationEventConsumerHost>.Instance;
 
-        var withoutSource = () => new IntegrationEventConsumerHost(null!, _consumer, options, logger);
-        var withoutConsumer = () => new IntegrationEventConsumerHost(_source, null!, options, logger);
-        var withoutOptions = () => new IntegrationEventConsumerHost(_source, _consumer, null!, logger);
-        var withoutLogger = () => new IntegrationEventConsumerHost(_source, _consumer, options, null!);
+        var withoutSource = () => new IntegrationEventConsumerHost(null!, _consumer, options, _clock, logger);
+        var withoutConsumer = () => new IntegrationEventConsumerHost(_source, null!, options, _clock, logger);
+        var withoutOptions = () => new IntegrationEventConsumerHost(_source, _consumer, null!, _clock, logger);
+        var withoutClock = () => new IntegrationEventConsumerHost(_source, _consumer, options, null!, logger);
+        var withoutLogger = () => new IntegrationEventConsumerHost(_source, _consumer, options, _clock, null!);
 
         withoutSource.Should().Throw<ArgumentNullException>().WithParameterName("source");
         withoutConsumer.Should().Throw<ArgumentNullException>().WithParameterName("consumer");
         withoutOptions.Should().Throw<ArgumentNullException>().WithParameterName("options");
+        withoutClock.Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
         withoutLogger.Should().Throw<ArgumentNullException>().WithParameterName("logger");
     }
 

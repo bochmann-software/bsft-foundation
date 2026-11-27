@@ -1,7 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <Compile Include="..\Shared\PostgresTestServer.cs" Link="Shared\PostgresTestServer.cs" />
+    <Compile Include="..\Shared\PostgresFactAttribute.cs" Link="Shared\PostgresFactAttribute.cs" />
+    <Compile Include="..\Shared\PollIntervalCounts.cs" Link="Shared\PollIntervalCounts.cs" />
+    <Compile Include="..\Shared\SignallingScopeFactory.cs" Link="Shared\SignallingScopeFactory.cs" />
+    <Compile Include="..\Shared\PollIntervalProbe.cs" Link="Shared\PollIntervalProbe.cs" />
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Bsft.Idempotency.EFCore\Bsft.Idempotency.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\Bsft.Testing\Bsft.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -11,6 +21,7 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="Microsoft.Extensions.Configuration" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
   </ItemGroup>

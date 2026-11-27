@@ -210,6 +210,52 @@ public class SchedulingEndToEndTests
     }
 
     [Fact]
+    public async Task TheResultOfTheAttemptThatSettlesTheRunIsTheOneStored()
+    {
+        using var provider = Build(s => s
+            .AddBsftScheduling(o => { o.MaxAttempts = 2; o.RetryDelay = TimeSpan.FromMinutes(1); })
+            .AddBsftJob<FirstAttemptFailingResultJob>("counting"));
+
+        long id;
+        using (var scope = provider.CreateScope())
+        {
+            id = await scope.ServiceProvider.GetRequiredService<IJobScheduler>().EnqueueAsync("counting", TimeSpan.Zero);
+        }
+
+        await PumpAsync(provider);
+        var retried = await provider.GetRequiredService<IJobStore>().FindAsync(id);
+        retried!.Status.Should().Be(JobRunStatus.Pending);
+        retried.Result.Should().BeNull("an attempt that is retried leaves no result behind");
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await PumpAsync(provider);
+
+        var settled = await provider.GetRequiredService<IJobStore>().FindAsync(id);
+        settled!.Status.Should().Be(JobRunStatus.Completed);
+        settled.Result.Should().Be(TestRunResults.Of("counting/v1", """{"attempt":2}"""));
+    }
+
+    [Fact]
+    public async Task ARunThatFailsForGoodKeepsWhatItRecordedBeforeFailing()
+    {
+        using var provider = Build(s => s
+            .AddBsftScheduling(o => o.MaxAttempts = 1)
+            .AddBsftJob<FirstAttemptFailingResultJob>("counting"));
+
+        long id;
+        using (var scope = provider.CreateScope())
+        {
+            id = await scope.ServiceProvider.GetRequiredService<IJobScheduler>().EnqueueAsync("counting", TimeSpan.Zero);
+        }
+
+        await PumpAsync(provider);
+
+        var settled = await provider.GetRequiredService<IJobStore>().FindAsync(id);
+        settled!.Status.Should().Be(JobRunStatus.Failed);
+        settled.Result.Should().Be(TestRunResults.Of("counting/v1", """{"attempt":1}"""));
+    }
+
+    [Fact]
     public async Task TheWorkOfACrashedInstanceIsPickedUpOnceItsLeaseExpires()
     {
         var store = new InMemoryJobStore();
@@ -312,5 +358,18 @@ public class SchedulingEndToEndTests
 
         public async Task ExecuteAsync(JobExecutionContext context, CancellationToken ct = default) =>
             await _scheduler.EnqueueAsync("report", TimeSpan.Zero, cancellationToken: ct);
+    }
+
+    /// <summary>Records which attempt it is on, then fails on the first attempt and succeeds after.</summary>
+    private sealed class FirstAttemptFailingResultJob : IJob
+    {
+        public Task ExecuteAsync(JobExecutionContext context, CancellationToken cancellationToken = default)
+        {
+            context.ResultRecorder.Record("counting/v1", new { Attempt = context.AttemptNumber });
+
+            return context.AttemptNumber == 1
+                ? Task.FromException(new InvalidOperationException("the first attempt fails"))
+                : Task.CompletedTask;
+        }
     }
 }

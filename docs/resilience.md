@@ -21,14 +21,17 @@ along, and a host with resilient HTTP clients takes no mediator dependency. A
 Retry is opt-in per request type, with an attribute:
 
 ```csharp
-using Bsft.Resilience.Mediator;
+using Bsft.Mediator;
 
 [Retryable]
 public sealed record SyncProductPriceQuery(string Sku) : IQuery<decimal>;
 ```
 
 `RetryableAttribute` has no properties — the bare `[Retryable]` is the whole
-API. It is applied to the **request**, valid on classes and structs, and is
+API. It lives in `Bsft.Mediator.Abstractions` (namespace `Bsft.Mediator`) since 2.2.1-preview.1, so a
+contracts project marks its requests without referencing a resilience package. The former
+`Bsft.Resilience.Mediator.RetryableAttribute` stays, hidden, and `RetryBehavior` honours both; a file that
+imports both namespaces names the new one or drops `using Bsft.Resilience.Mediator;`. It is applied to the **request**, valid on classes and structs, and is
 inherited.
 
 Only mark idempotent requests. Retrying a command that charges a card produces a
@@ -51,20 +54,154 @@ while validation, authorization and audit run once per request. Registration
 order only decides the position in a hand-wired chain — one that omits
 `UseDefaults()`. See [mediator.md](mediator.md), "The default chain".
 
+### Retrying a shared transaction
+
+A host that registered the shared transaction of `Bsft.Data`
+([data.md](data.md#a-transaction-across-several-contexts)) has an
+`IAmbientTransaction` in every request scope, and the behavior consults it. Four
+things change for such a host:
+
+- **Only the outermost unit is retried.** A `[Retryable]` request dispatched while
+  the transaction is already open — a nested command of another module — passes
+  through untried. The store has typically aborted the whole transaction with the
+  failure (PostgreSQL answers every later statement with `25P02` until the
+  rollback), so retrying the nested request inside it cannot succeed. The failure
+  propagates to the outermost attempt, whose transaction is rolled back and whose
+  enlisted change trackers are cleared, and the whole attempt runs again. A host
+  that applies the mediator transaction to all commands gets the same rule without
+  the shared transaction; see [Nested retryable requests](#nested-retryable-requests).
+- **Every further attempt runs in a fresh scope.** The behavior is an
+  `IRescopingPipelineBehavior` ([mediator.md](mediator.md#rescoping-behaviors)):
+  attempts after the first resolve the later behaviors, the handler, the
+  connection, the contexts and the transaction from a new dependency-injection
+  scope, so no scoped service carries what the failed attempt left behind. State
+  the request's scope holds (the tenant, the current user) reaches the fresh scope
+  only through a registered `IRequestScopeSeed`. A host without the shared
+  transaction keeps retrying in the request's scope, as before.
+- **A transaction conflict is always retried.** A failure the provider's
+  `ITransactionConflictClassifier` classifies as a conflict with a concurrent
+  transaction — `Bsft.Data.Postgres` classifies `40001` (serialization failure)
+  and `40P01` (deadlock), looking through EF Core's `DbUpdateException` — is
+  retried even when `ShouldRetry` says no, within `MaxRetryAttempts`. A host can
+  therefore narrow `ShouldRetry` to its own transient failures without losing the
+  retry PostgreSQL asks for.
+- **A misuse of the transaction is never retried.** The shared transaction throws
+  an `AmbientTransactionMisuseException` (an `InvalidOperationException`) when a
+  failure inside the unit was caught and the work completed anyway, when a second
+  outermost unit starts beside a running one in the same scope, and when an
+  enlisted context retries on its own through `EnableRetryOnFailure`. Each fails
+  the same way on every attempt, and the overlapping unit would even succeed in a
+  fresh scope and hide the bug, so neither the default `IsTransientFailure` nor a
+  host's own `ShouldRetry` retries it. The one exception is a swallowed conflict:
+  the swallowed failure is the inner exception, and when the classifier calls it a
+  conflict (a caught `40P01`) the whole unit is retried as before, because the
+  store ended that attempt. The classification walks the whole inner-exception
+  chain, and from 2.2.1-preview.2 the misuse of a swallowed nested unit carries
+  that unit's first failure as well.
+
+The idempotency requirement is the same as for any `[Retryable]` request, and it
+covers the whole outermost unit including every nested command: each attempt runs
+every handler again. The database writes of a failed attempt are rolled back, but
+an email, an outbound call or anything else outside the shared transaction is
+not; defer such work to an outbox that commits with the transaction, or make it
+idempotent.
+
+For database transients the provider's classifier is the intended source of
+truth, not `ShouldRetry`: the ambient transaction asks every registered
+`ITransactionConflictClassifier`, which knows the store's own codes, while
+`ShouldRetry` sees only exception types. A host on the shared transaction can
+leave `ShouldRetry` at its default or narrow it to non-database transients (a
+timeout of an outbound call made inside the unit); it does not need to list
+`PostgresException` codes itself.
+
+### Logging each retry
+
+From 2.2.1-preview.2 the pipeline logs one warning per retry, when the host
+registered logging (`AddLogging()`; without it the provider logs nothing). The
+category is `Bsft.Resilience.Mediator.MediatorResiliencePipelineProvider`, the event
+`1`/`MediatorRequestRetrying`, and the entry is structured:
+
+| Property | Value |
+| --- | --- |
+| `RequestType` | Full name of the request's runtime type |
+| `RetryAttempt` | The retry about to run, from 1 |
+| `SqlState` | The SQLSTATE of the failure that caused the retry: of the conflict the ambient transaction classified (a swallowed `40P01`, also when the handler then failed with `25P02`), else the first `DbException.SqlState` in the failure's inner-exception chain, or `none` |
+| `ExceptionType` | Full name of the exception the failed attempt ended with |
+
+Neither the exception nor its message is logged: a store's message and detail can
+carry the values of the rows involved. The final failure, which the request
+propagates, is the caller's to log.
+
+### Every command without the attribute
+
+A host in which every write is retry-safe as a whole — typically one on the
+shared transaction with an outbox for everything outside the database — can
+retry every command instead of marking each one:
+
+```csharp
+services.AddBsftResilienceMediator(options => options.ShouldRetryAllCommands = true);
+```
+
+`ShouldRetryAllCommands` treats every `ICommand<T>` and `ICommand` as if it carried
+`[Retryable]`; queries are still retried only where marked. Retry stays
+outermost-only: a request dispatched from inside a retried one passes through, so
+a nested failure reaches the outer attempt instead of being retried on its own
+and multiplying the attempts. A startup validator fails the host when
+`ShouldRetryAllCommands` is on and either the mediator does not apply the
+transaction to all commands (`ApplyTransactionToAllCommands()`) or no
+`IAmbientTransaction` is registered (`AddBsftDataSharedTransaction()` or
+`AddBsftDataPostgresTransaction()`). Without one transaction around the unit, a
+retry reruns the handlers whose writes already committed. Without the ambient
+transaction, a retry runs in the request's scope over the contexts the failed
+attempt used: an order it added before its `SaveChanges` failed is still tracked
+as added, and the retry writes it a second time.
+
+The property keeps the name `ShouldRetryAllCommands` rather than mirroring the
+mediator's `ApplyTransactionToAllCommands()`: it is a bindable option
+(`Bsft:Resilience:Mediator:ShouldRetryAllCommands`), and options are named as
+properties, the builder call as a verb.
+
+### Nested retryable requests
+
+From 2.2.1-preview.1, `IRequestNesting` records two things about the outer
+requests of a scope, and the behavior reads them as follows:
+
+- **An outer request is being retried.** In every host, a `[Retryable]` request
+  dispatched inside it passes through untried. This is a bug fix: in 2.2.0 such a
+  nested request was retried on its own inside each attempt of the outer request,
+  which multiplied the attempts. A host that relied on a nested retry marks the
+  outer request `[Retryable]` instead.
+- **An outer request holds a mediator transaction open.** A nested request passes
+  through untried only in a host where it joins that transaction: one that
+  registered an `IAmbientTransaction`, or applies the transaction to all commands
+  (`ApplyTransactionToAllCommands()`, [mediator.md](mediator.md#transactions)).
+  Inside a joined transaction the store has typically aborted with the failure, so
+  only the outer attempt can succeed. Any other host, where the outer
+  `[Transactional]` handler holds a transaction of its own, keeps retrying a
+  nested `[Retryable]` request as in 2.2.0.
+
+Apart from the first rule, a host that opts into none of the additions sees no
+behavioral change.
+
+The behavior keeps its slot in the default chain, inside authorization,
+validation and audit, which therefore still run once per request.
+
 ### Options
 
 `BsftResilienceMediatorOptions`:
 
 | Property | Default | Meaning |
 | --- | --- | --- |
-| `MaxRetryAttempts` | `3` | Attempts after the first. |
+| `MaxRetryAttempts` | `3` | Retries **after** the first attempt, not attempts: `3` runs a request at most four times. At least `1`, which the options validation enforces; a request that is not to be retried is not marked `[Retryable]`. |
 | `BaseDelay` | 200 ms | Grows exponentially, with jitter. |
-| `ShouldRetry` | `IsTransientFailure` | Predicate deciding whether to retry. |
+| `ShouldRetry` | `IsTransientFailure` | Predicate deciding whether to retry. A failure the ambient transaction's classifier calls a conflict is retried regardless; an `AmbientTransactionMisuseException` that is no conflict never is. |
+| `ShouldRetryAllCommands` | `false` | Retry every command as if it carried `[Retryable]`. Needs `ApplyTransactionToAllCommands()` and a registered `IAmbientTransaction`, which a startup validator checks. |
 
 The default predicate never retries `OperationCanceledException`, and never
 retries the deterministic exceptions from `Bsft.Core`: `ValidationException`,
 `BusinessRuleException`, `NotFoundException`, `ForbiddenException`,
-`ConflictException`. A second attempt would fail identically, so retrying them
+`ConflictException`, and never `AmbientTransactionMisuseException`. A second
+attempt would fail identically, so retrying them
 only wastes the caller's time. Everything else is treated as transient. This is
 the practical reason to throw the `Bsft.Core` exception types — see
 [core.md](core.md).
@@ -143,6 +280,7 @@ var tokens = ResilientStreamExtensions.WithRetry(
     ct => client.StreamCompletionAsync(prompt, ct),
     options =>
     {
+        options.TimeProvider = timeProvider;
         options.MaxRetryAttempts = 5;
         options.BaseDelay = TimeSpan.FromMilliseconds(500);
     },
@@ -176,7 +314,11 @@ that can skip a prefix turns the restart into a continuation.
 ```csharp
 var rows = ResilientStreamExtensions.WithRetry(
     (context, ct) => source.ReadFromAsync(offset: context.ItemsYielded, ct),
-    options => options.PartialStreamPolicy = PartialStreamPolicy.RestartFromStart,
+    options =>
+    {
+        options.TimeProvider = timeProvider;
+        options.PartialStreamPolicy = PartialStreamPolicy.RestartFromStart;
+    },
     cancellationToken);
 ```
 
@@ -237,7 +379,7 @@ cancellation, and the consumer simply abandoning the stream.
 | `UseJitter` | `true` | Scales the delay by a factor in `[0.5, 1)`. |
 | `ShouldRetry` | `IsTransientFailure` | The classifier. |
 | `PartialStreamPolicy` | `RethrowMidStream` | What a mid-stream failure does. |
-| `TimeProvider` | `TimeProvider.System` | What the backoff waits on. |
+| `TimeProvider` | none, required | What the backoff waits on; `WithRetry` throws when it is not set. |
 
 They are validated on the `WithRetry` call, before anything is enumerated: a
 budget that could never work fails where the stack still names the call site,

@@ -1,3 +1,4 @@
+using Bsft.Data.MultiTenancy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -19,7 +20,17 @@ public sealed class InboxMessageEntityConfiguration : IEntityTypeConfiguration<I
     {
         builder.ToTable("InboxMessages");
 
-        builder.HasKey(e => e.Id);
+        // Under UseTenantKeys the record carries its tenant, which leads the key and the unique index,
+        // and its id is made by the client; without it the table keeps its identity key and no tenant column.
+        var isTenantKeyed = builder.IsTenantKeyed();
+
+        if (isTenantKeyed)
+            builder.HasTenantKey(e => e.TenantId, e => e.Id);
+        else
+        {
+            builder.HasKey(e => e.Id);
+            builder.Ignore(e => e.TenantId);
+        }
 
         // A length is mandatory on the indexed columns, not cosmetic: an unbounded string maps to
         // nvarchar(max) on SQL Server, which is rejected outright as an index key column.
@@ -34,6 +45,9 @@ public sealed class InboxMessageEntityConfiguration : IEntityTypeConfiguration<I
         // Consumer leads, because every query is for one consumer: the uniqueness check, and an
         // operator asking what a given consumer has processed. Leading with EventId would serve
         // neither without scanning.
-        builder.HasIndex(e => new { e.Consumer, e.EventId }).IsUnique();
+        if (isTenantKeyed)
+            builder.HasIndex(e => new { e.TenantId, e.Consumer, e.EventId }).IsUnique();
+        else
+            builder.HasIndex(e => new { e.Consumer, e.EventId }).IsUnique();
     }
 }

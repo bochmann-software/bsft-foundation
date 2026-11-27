@@ -78,6 +78,9 @@ export function readRepository(root) {
         // Only a package has a tier; a sample or a test project belongs to the Foundation by being
         // listed in Bsft.Foundation.sln, which the foundation-solution rule checks.
         tier: top === 'src' ? tierOf(version) : null,
+        // PC 5: a package that does not ship yet says so in its project file and in its packages.md
+        // row, which the packages-unreleased rule compares.
+        isPackable: xmlValue(xml, 'IsPackable') !== 'false',
         references: [...xml.matchAll(/<ProjectReference\s+Include="([^"]+)"/g)].map((m) => basename(m[1].replaceAll('\\', '/'), '.csproj')),
         root: expectedRootNamespace(assemblyName),
         files: [],

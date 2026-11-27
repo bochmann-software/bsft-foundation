@@ -76,6 +76,11 @@ public interface IJobStore
     /// <summary>
     /// Moves a claimed run to a terminal state and releases its lease.
     /// </summary>
+    /// <remarks>
+    /// The store also keeps <see cref="JobRun.Result"/> as the run carries it, which is
+    /// <see langword="null"/> for a job that recorded nothing. A store that predates the result may
+    /// ignore it; the run then settles as before and lists without a result.
+    /// </remarks>
     /// <param name="run">The claimed run, carrying the token from <see cref="ClaimAsync"/>.</param>
     /// <param name="status">The terminal state to record.</param>
     /// <param name="settledAt">The instant to record as the settlement time.</param>

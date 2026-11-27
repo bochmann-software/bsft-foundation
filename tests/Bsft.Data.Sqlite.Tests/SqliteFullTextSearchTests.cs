@@ -229,6 +229,7 @@ public sealed class SqliteFullTextSearchTests : IDisposable
         var executor = new SearchExecutor<Candidate, CandidateDto>(
             new CompiledSearchConfiguration<Candidate, CandidateDto>(new CandidateQueryConfiguration()),
             new NullTelemetry(),
+            TimeProvider.System,
             new SqliteSearchProvider(Options.Create(SqliteSearchProviderTests.SearchOptions())),
             new FixedScopeProvider(scope ?? new SearchScopeState("t1", [_berlin, _hamburg])));
 

@@ -1,9 +1,9 @@
 using Bsft.Hosting.BackgroundWork.Pipelines;
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Bsft.Instrumentation.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace Bsft.Hosting.BackgroundWork.DependencyInjection;
@@ -101,7 +101,7 @@ public static class PipelineServiceCollectionExtensions
 
         // Registered the wrong way round the host would stop the writer first, and the stage's last items
         // would meet a completed buffer; refused here instead of lost silently there.
-        if (!services.Any(descriptor => !descriptor.IsKeyedService && descriptor.ImplementationType == typeof(BatchingWriterWorker<TItem>)))
+        if (!services.HasBsftGatedHostedService<BatchingWriterWorker<TItem>>())
         {
             throw new InvalidOperationException(
                 $"AddBsftPipelineEnrichment<{typeof(TItem).Name}> needs AddBsftBatchingWriter<{typeof(TItem).Name}, ...> registered first.");
@@ -115,8 +115,7 @@ public static class PipelineServiceCollectionExtensions
 
         // One hosted descriptor per item type: a second one would start a second reader on a channel
         // that has exactly one.
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, EnrichmentStageWorker<TItem>>(
-            provider => provider.GetRequiredService<EnrichmentStageWorker<TItem>>()));
+        services.AddBsftGatedHostedService<EnrichmentStageWorker<TItem>>();
 
         return services;
     }
@@ -144,7 +143,7 @@ public static class PipelineServiceCollectionExtensions
         services.TryAddSingleton<IBoundedBufferSource<TItem>>(provider => provider.GetRequiredService<BoundedBuffer<TItem>>());
         services.TryAddSingleton<IBatchCommitter<TItem>, TCommitter>();
         services.TryAddSingleton<IBatchCommitRunner<TItem>, BatchCommitRunner<TItem>>();
-        services.AddHostedService<BatchingWriterWorker<TItem>>();
+        services.AddBsftGatedHostedService<BatchingWriterWorker<TItem>>();
 
         return services;
     }

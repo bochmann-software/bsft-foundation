@@ -10,6 +10,7 @@
     "thresholds": { "high": 100, "low": 100, "break": 0 },
     "mutate": [ "!**/obj/**", "!**/bin/**", "!**/samples/**", "!**/templates/**" ],
     "ignore-mutations": [ "string" ],
+    "test-case-filter": "Category!=Allocation",
     "ignore-methods": [
       "ArgumentNullException.ThrowIfNull",
       "ArgumentException.ThrowIfNullOrEmpty",

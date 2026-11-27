@@ -20,7 +20,7 @@ public class ResilientStreamExtensionsTests
             {
                 invocations++;
                 return Streams.Range(0, 3, ct);
-            })
+            }, NoWait)
             .Collect();
 
         items.Should().Equal(0, 1, 2);
@@ -429,7 +429,15 @@ public class ResilientStreamExtensionsTests
 
     /// <summary>Never waits: the retry tests that are not about timing must not spend real time.</summary>
     /// <param name="options">The options to flatten.</param>
-    private static void NoWait(BsftResilienceStreamOptions options) => options.BaseDelay = TimeSpan.Zero;
+    /// <summary>
+    /// Takes the delay out of the retries and names the clock the options require; the recording clock
+    /// never waits, so a retry that does back off still runs at once.
+    /// </summary>
+    private static void NoWait(BsftResilienceStreamOptions options)
+    {
+        options.BaseDelay = TimeSpan.Zero;
+        options.TimeProvider = new RecordingTimeProvider();
+    }
 
     /// <summary>An endless stream that reports its disposal.</summary>
     /// <param name="cancellationToken">Stops the enumeration.</param>

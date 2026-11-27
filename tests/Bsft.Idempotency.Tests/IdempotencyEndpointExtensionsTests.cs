@@ -37,4 +37,20 @@ public class IdempotencyEndpointExtensionsTests
     public void RequireIdempotencyKey_NullBuilder_IsRefused() =>
         FluentActions.Invoking(() => ((ConventionRecorder)null!).RequireIdempotencyKey())
             .Should().Throw<ArgumentNullException>().WithParameterName("builder");
+
+    [Fact]
+    public void WithSensitiveResponse_MarksTheEndpointResponseAsSensitive()
+    {
+        var recorder = new ConventionRecorder();
+
+        var returned = recorder.WithSensitiveResponse();
+
+        returned.Should().BeSameAs(recorder);
+        recorder.Build().Metadata.GetMetadata<SensitiveIdempotentResponseAttribute>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void WithSensitiveResponse_NullBuilder_IsRefused() =>
+        FluentActions.Invoking(() => ((ConventionRecorder)null!).WithSensitiveResponse())
+            .Should().Throw<ArgumentNullException>().WithParameterName("builder");
 }

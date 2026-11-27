@@ -18,7 +18,7 @@ public class BsftFileLoggerTests : IDisposable
     public void TextFormat_IncludesTimestampLevelCategoryMessage()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("My.App.OrderService");
 
         logger.LogWarning("Order {OrderId} delayed", 42);
@@ -36,7 +36,7 @@ public class BsftFileLoggerTests : IDisposable
     {
         var options = LogFileFixture.Options();
         options.EnableJsonFormat = true;
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("My.App.TestService");
 
         logger.LogInformation("json test message");
@@ -62,7 +62,7 @@ public class BsftFileLoggerTests : IDisposable
         // buffer that big attached to its thread for the life of the process.
         var options = LogFileFixture.Options();
         options.EnableJsonFormat = true;
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("My.App.BulkService");
 
         logger.LogInformation("{Payload}", new string('x', 128 * 1024));
@@ -84,7 +84,7 @@ public class BsftFileLoggerTests : IDisposable
     public void LogsExceptionDetails()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("ExceptionTest");
 
         var exception = new InvalidOperationException("Something went wrong");
@@ -103,7 +103,7 @@ public class BsftFileLoggerTests : IDisposable
     public void CorrelationId_AppearsInLogOutput()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("CorrelationTest");
 
         using (logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = "test-corr-123" }))
@@ -122,7 +122,7 @@ public class BsftFileLoggerTests : IDisposable
     public void Critical_LogLevel_UsesCorrectAbbreviation()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("CritTest");
 
         logger.LogCritical("critical message");
@@ -137,7 +137,7 @@ public class BsftFileLoggerTests : IDisposable
     public void EmptyCategory_ReturnsEmptyCategoryName()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger(string.Empty); // empty category
 
         logger.LogInformation("empty cat message");
@@ -153,7 +153,7 @@ public class BsftFileLoggerTests : IDisposable
     {
         var options = LogFileFixture.Options();
         options.MinimumLevel = LogLevel.Warning;
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("FilterTest");
 
         logger.LogInformation("should not appear");
@@ -173,7 +173,7 @@ public class BsftFileLoggerTests : IDisposable
     public void BeginScope_IReadOnlyListWithCorrelationId_AppearsInLogOutput()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("ScopeListTest");
 
         // IReadOnlyList<KVP<string,object>> that IS IReadOnlyList (not just IEnumerable) WITH CorrelationId
@@ -199,7 +199,7 @@ public class BsftFileLoggerTests : IDisposable
     {
         // A scope the logger carries nothing from is not a scope it has to hold open.
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("ScopeTest");
 
         // IReadOnlyList<KVP> without CorrelationId key
@@ -218,7 +218,7 @@ public class BsftFileLoggerTests : IDisposable
         // The shape the logging framework passes is a list, but a caller may pass any enumerable of
         // pairs, and one without a correlation id opens no scope either.
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("ScopeTest2");
 
         // Use a custom IEnumerable that is NOT IReadOnlyList
@@ -238,7 +238,7 @@ public class BsftFileLoggerTests : IDisposable
     {
         // A scope state that is not a set of pairs carries no correlation id to read.
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("ScopeTest3");
 
         // Pass a plain string - not a KVP collection at all
@@ -252,7 +252,7 @@ public class BsftFileLoggerTests : IDisposable
     public void Log_NullFormatter_ThrowsArgumentNullException()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("NullFormatterTest");
 
         Func<string, Exception?, string> nullFormatter = null!;
@@ -266,7 +266,7 @@ public class BsftFileLoggerTests : IDisposable
     public void Log_FormatterReturnsNull_IsIgnored()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("NullMessageTest");
 
         // Formatter returns null -> message is null -> early return, no file written
@@ -288,7 +288,7 @@ public class BsftFileLoggerTests : IDisposable
     {
         var options = LogFileFixture.Options();
         options.EnableJsonFormat = true;
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("JsonExceptionTest");
 
         var exception = new InvalidOperationException("json exception detail");
@@ -311,7 +311,7 @@ public class BsftFileLoggerTests : IDisposable
     {
         var options = LogFileFixture.Options();
         options.MinimumLevel = LogLevel.Trace;
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("TraceTest");
 
         logger.LogTrace("trace message");
@@ -327,7 +327,7 @@ public class BsftFileLoggerTests : IDisposable
     {
         var options = LogFileFixture.Options();
         options.MinimumLevel = LogLevel.Debug;
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("DebugTest");
 
         logger.LogDebug("debug message");
@@ -342,7 +342,7 @@ public class BsftFileLoggerTests : IDisposable
     public void UnknownLogLevel_GetLogLevelAbbreviation_ReturnsQuestionMarks()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("UnknownLevelTest");
 
         // Invoke GetLogLevelAbbreviation via reflection with an unknown LogLevel value
@@ -362,7 +362,7 @@ public class BsftFileLoggerTests : IDisposable
     public void TextFormat_MessageWithCrlf_IsWrittenAsSingleLine()
     {
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("Test");
 
         logger.LogInformation("legit\r\n[2026-01-01 00:00:00.000 ERR] [x] forged: injected");
@@ -382,7 +382,7 @@ public class BsftFileLoggerTests : IDisposable
         // LogLevel.None sorts above every real level, so only the explicit != None guard in
         // BsftFileLogger.IsEnabled keeps it out of the file.
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("NoneTest");
 
         logger.Log(LogLevel.None, default, "state", null, (_, _) => "should not be written");
@@ -400,7 +400,7 @@ public class BsftFileLoggerTests : IDisposable
         // Complements UnknownLogLevel_GetLogLevelAbbreviation_ReturnsQuestionMarks by going through a
         // real Log call instead of reflection, so the fallback is asserted on the written line.
         var options = LogFileFixture.Options();
-        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory);
+        var provider = new BsftFileLoggerProvider(options, _log.LogDirectory, _log.Clock);
         var logger = provider.CreateLogger("UnknownLevelWriteTest");
 
         logger.Log((LogLevel)99, default, "state", null, (_, _) => "unknown level message");

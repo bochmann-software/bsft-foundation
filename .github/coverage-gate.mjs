@@ -44,7 +44,7 @@ export function findReports(dir) {
   return out;
 }
 
-// Merges reports into Map<"package|file", Map<line, hits>>. `readSource(sources, filename)` returns the
+// Merges reports into Map<"package|file", Map<line, hits>>. `readSource(sources, filename, packageName)` returns the
 // text of a reported file or undefined; it is read once per class that reports a property accessor.
 export function mergeReports(texts, readSource = readReportedSource) {
   const lines = new Map();
@@ -64,7 +64,7 @@ export function mergeReports(texts, readSource = readReportedSource) {
             const n = Number(l[1]);
             let synthesized = false;
             if (property) {
-              source ??= readSource(sources, decode(cls[1])) ?? null;
+              source ??= readSource(sources, decode(cls[1]), decode(pkg[1])) ?? null;
               synthesized = source !== null && isPositionalRecordParameter(source, n, property);
             }
             const k = `${key}|${n}`;

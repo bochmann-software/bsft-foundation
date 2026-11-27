@@ -15,6 +15,7 @@ internal sealed class PolicyLimiterLink : IDisposable
 {
     private readonly PolicyLimiterOptions _options;
     private readonly Func<HttpContext, string?>? _selector;
+    private readonly string _customKeyPrefix;
 
     /// <summary>Initializes a new instance of the <see cref="PolicyLimiterLink"/> class.</summary>
     /// <param name="options">The limiter's options, already validated.</param>
@@ -25,6 +26,7 @@ internal sealed class PolicyLimiterLink : IDisposable
         _selector = options.PartitionBy == RateLimitPartitionKind.Custom
             ? rateLimiting.PartitionKeySelectors[options.PartitionKeySelector!]
             : null;
+        _customKeyPrefix = rateLimiting.CustomPartitionKeyPrefix;
         RetryAfterFallback = TimeSpan.FromSeconds(options.RetryAfterSeconds ?? rateLimiting.RetryAfterSeconds);
         Limiter = PartitionedRateLimiter.Create<string, string>(key => Partition(key, options));
     }
@@ -41,7 +43,7 @@ internal sealed class PolicyLimiterLink : IDisposable
     /// <summary>The key this link counts <paramref name="context"/> against.</summary>
     /// <param name="context">The request being limited.</param>
     /// <returns>The partition key.</returns>
-    internal string KeyFor(HttpContext context) => RateLimitPartitionKeys.For(_options, _selector, context);
+    internal string KeyFor(HttpContext context) => RateLimitPartitionKeys.For(_options, _selector, context, _customKeyPrefix);
 
     /// <inheritdoc />
     public void Dispose() => Limiter.Dispose();
@@ -56,7 +58,7 @@ internal sealed class PolicyLimiterLink : IDisposable
     /// </remarks>
     private static RateLimitPartition<string> Partition(string key, PolicyLimiterOptions options)
     {
-        var window = TimeSpan.FromSeconds(options.WindowSeconds);
+        var window = options.EffectiveWindow;
 
         return options.Kind switch
         {

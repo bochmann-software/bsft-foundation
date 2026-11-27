@@ -7,7 +7,7 @@ namespace Bsft.Mediator;
 /// <summary>
 /// Fluent configuration class for registering mediator handlers and pipeline behaviors.
 /// </summary>
-public sealed class MediatorConfiguration
+public sealed class MediatorConfiguration : IMediatorTransactionPolicy
 {
     /// <summary>
     /// The diagnostic for forwarding that is enabled without a bridge to carry it. Shared by the
@@ -40,13 +40,23 @@ public sealed class MediatorConfiguration
         Catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     }
 
-    internal DefaultBehaviorCatalog Catalog { get; }
+    internal DefaultBehaviorCatalog Catalog { get; private set; }
     internal List<Assembly> Assemblies { get; } = [];
-    internal List<Type> BehaviorTypes { get; } = [];
+    /// <summary>
+    /// The behaviors added after the default chain, in the order of the configuration calls: those of
+    /// <see cref="AddBehavior"/>, and the slot replacements placed with
+    /// <see cref="DefaultBehaviorPlacement.AfterDefaults"/>, which are marked as filling a slot.
+    /// </summary>
+    internal List<(Type BehaviorType, bool FillsSlot)> AddedBehaviors { get; } = [];
     internal List<string> SuppressedDefaults { get; } = [];
+    internal List<string> ReplacedDefaults { get; } = [];
     internal bool ShouldForwardNotifications { get; private set; }
     internal bool ShouldTrace { get; private set; }
     internal bool ShouldUseDefaults { get; private set; }
+
+    /// <inheritdoc />
+    /// <remarks>Set by <see cref="ApplyTransactionToAllCommands"/>.</remarks>
+    public bool ShouldApplyTransactionToAllCommands { get; private set; }
 
     /// <summary>
     /// Scans the specified assembly for command handlers, query handlers, and notification handlers
@@ -87,7 +97,7 @@ public sealed class MediatorConfiguration
 
         ValidateBehaviorType(behaviorType);
 
-        BehaviorTypes.Add(behaviorType);
+        AddedBehaviors.Add((behaviorType, false));
         return this;
     }
 
@@ -153,6 +163,24 @@ public sealed class MediatorConfiguration
     }
 
     /// <summary>
+    /// Makes every command transactional, as if each command handler carried
+    /// <see cref="TransactionalAttribute"/>. Queries stay transactional only where their handler is marked.
+    /// </summary>
+    /// <remarks>
+    /// Meant for a host where every write belongs in a transaction, typically together with the shared
+    /// transaction of <c>Bsft.Data</c>: the outermost command then opens it and every command it
+    /// dispatches joins it. Without the shared transaction, a command dispatched while the behavior holds
+    /// a transaction open runs inside that transaction rather than beginning a second one. The behavior
+    /// keeps its slot in the default chain, inside authorization, validation and retry.
+    /// </remarks>
+    /// <returns>The current configuration instance for method chaining.</returns>
+    public MediatorConfiguration ApplyTransactionToAllCommands()
+    {
+        ShouldApplyTransactionToAllCommands = true;
+        return this;
+    }
+
+    /// <summary>
     /// Removes one behavior from the default chain, leaving the rest in their canonical order.
     /// </summary>
     /// <remarks>
@@ -164,6 +192,7 @@ public sealed class MediatorConfiguration
     /// <returns>The current configuration instance for method chaining.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> is null.</exception>
     /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> matches no default behavior.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the slot is replaced by <see cref="ReplaceDefaultBehavior(string, Type, DefaultBehaviorPlacement)"/>.</exception>
     public MediatorConfiguration SuppressDefaultBehavior(string name)
     {
         if (name is null)
@@ -174,8 +203,133 @@ public sealed class MediatorConfiguration
                 $"'{name}' is not a default pipeline behavior. Known behaviors: {Catalog.DescribeKnownNames()}.",
                 nameof(name));
 
+        if (ReplacedDefaults.Contains(name, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"The default pipeline behavior '{name}' is replaced, so it cannot also be suppressed. Keep one of the two calls.");
+
         SuppressedDefaults.Add(name);
         return this;
+    }
+
+    /// <summary>
+    /// Puts another behavior into one slot of the default chain: it runs where the default behavior of
+    /// that name would run, and the default behavior is not registered by <see cref="UseDefaults"/>.
+    /// </summary>
+    /// <remarks>
+    /// The same as <see cref="ReplaceDefaultBehavior(string, Type, DefaultBehaviorPlacement)"/> with
+    /// <see cref="DefaultBehaviorPlacement.InSlot"/>; the remarks there describe both.
+    /// </remarks>
+    /// <param name="name">The slot name, from <see cref="MediatorDefaults"/>.</param>
+    /// <param name="behaviorType">
+    /// The open generic behavior type definition that fills the slot, such as <c>typeof(MyBehavior&lt;,&gt;)</c>.
+    /// </param>
+    /// <returns>The current configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="name"/> matches no default behavior, or when <paramref name="behaviorType"/> is
+    /// not an open generic type definition with two type parameters implementing
+    /// <see cref="IPipelineBehavior{TRequest, TResponse}"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the slot is already suppressed or replaced.
+    /// </exception>
+    public MediatorConfiguration ReplaceDefaultBehavior(string name, Type behaviorType) =>
+        ReplaceDefaultBehavior(name, behaviorType, DefaultBehaviorPlacement.InSlot);
+
+    /// <summary>
+    /// Fills one slot of the default chain with another behavior, run at the given placement; the default
+    /// behavior of that name is not registered by <see cref="UseDefaults"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The replacement takes over everything the framework knows about the slot: the startup checks that ask
+    /// whether the slot's behavior is registered — the authorization coverage check among them — ask about the
+    /// replacement, whatever its placement. A host that enforces permissions with a behavior of its own
+    /// therefore replaces <see cref="MediatorDefaults.Authorization"/> with it rather than suppressing the slot
+    /// and adding the behavior beside the chain, which would leave the coverage check warning about requests
+    /// the host's behavior does enforce.
+    /// </para>
+    /// <para>
+    /// With <see cref="DefaultBehaviorPlacement.InSlot"/> the canonical orderer ranks the replacement at the
+    /// slot's position, so it keeps its place among the other defaults whatever order the registrations ran
+    /// in. With <see cref="DefaultBehaviorPlacement.AfterDefaults"/> it has no rank and is registered where
+    /// <see cref="AddBehavior"/> registers, in the order of the configuration calls: after the default chain,
+    /// so inside retry and transaction, and before or after the other added behaviors as the calls were made.
+    /// That is the placement for a behavior that must run once per attempt and inside the transaction, such
+    /// as an authorization that reads state the transaction protects. A registration of the same type made
+    /// earlier, directly against <see cref="IPipelineBehavior{TRequest, TResponse}"/>, is kept rather than
+    /// duplicated, and its position is the one that counts.
+    /// </para>
+    /// <para>
+    /// The default behavior the slot names loses its rank. A package that registers it on its own — such as
+    /// <c>AddBsftAuthMediator()</c> for <see cref="MediatorDefaults.Authorization"/> — still adds it, and it then
+    /// runs where its registration put it; a host replacing a slot does not make that call.
+    /// </para>
+    /// <para>
+    /// Like <see cref="SuppressDefaultBehavior"/>, this shapes the default chain and takes effect with
+    /// <see cref="UseDefaults"/>, whatever the placement. A slot is either replaced or suppressed, and replaced
+    /// once: a second decision about the same slot is a contradiction in the host's wiring and is rejected.
+    /// </para>
+    /// </remarks>
+    /// <param name="name">The slot name, from <see cref="MediatorDefaults"/>.</param>
+    /// <param name="behaviorType">
+    /// The open generic behavior type definition that fills the slot, such as <c>typeof(MyBehavior&lt;,&gt;)</c>.
+    /// </param>
+    /// <param name="placement">Where the replacement runs.</param>
+    /// <returns>The current configuration instance for method chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> or <paramref name="behaviorType"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="name"/> matches no default behavior, or when <paramref name="behaviorType"/> is
+    /// not an open generic type definition with two type parameters implementing
+    /// <see cref="IPipelineBehavior{TRequest, TResponse}"/>.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="placement"/> is not a defined <see cref="DefaultBehaviorPlacement"/> value.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the slot is already suppressed or replaced.
+    /// </exception>
+    public MediatorConfiguration ReplaceDefaultBehavior(string name, Type behaviorType, DefaultBehaviorPlacement placement)
+    {
+        if (name is null)
+            throw new ArgumentNullException(nameof(name));
+
+        if (behaviorType is null)
+            throw new ArgumentNullException(nameof(behaviorType));
+
+        if (placement is not (DefaultBehaviorPlacement.InSlot or DefaultBehaviorPlacement.AfterDefaults))
+            throw new ArgumentOutOfRangeException(
+                nameof(placement), placement, "The placement must be InSlot or AfterDefaults.");
+
+        if (!Catalog.IsKnown(name))
+            throw new ArgumentException(
+                $"'{name}' is not a default pipeline behavior. Known behaviors: {Catalog.DescribeKnownNames()}.",
+                nameof(name));
+
+        ValidateBehaviorType(behaviorType);
+        RefuseSecondDecision(name);
+
+        ReplacedDefaults.Add(name);
+        Catalog = Catalog.WithReplacement(name, behaviorType, placement);
+
+        if (placement == DefaultBehaviorPlacement.AfterDefaults)
+            AddedBehaviors.Add((behaviorType, true));
+
+        return this;
+    }
+
+    /// <summary>Rejects a second suppression or replacement of the same slot.</summary>
+    /// <param name="name">The slot name.</param>
+    /// <exception cref="InvalidOperationException">Thrown when the slot is already suppressed or replaced.</exception>
+    private void RefuseSecondDecision(string name)
+    {
+        if (ReplacedDefaults.Contains(name, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"The default pipeline behavior '{name}' is already replaced. A slot is replaced once; remove the second call.");
+
+        if (SuppressedDefaults.Contains(name, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"The default pipeline behavior '{name}' is suppressed, so it cannot also be replaced. Keep one of the two calls.");
     }
 
     internal void RegisterHandlers(IServiceCollection services)
@@ -230,9 +384,14 @@ public sealed class MediatorConfiguration
         if (ShouldUseDefaults)
             RegisterDefaultBehaviors(services);
 
-        foreach (var behaviorType in BehaviorTypes)
+        foreach (var (behaviorType, fillsSlot) in AddedBehaviors)
         {
-            services.AddTransient(typeof(IPipelineBehavior<,>), behaviorType);
+            // A slot replacement shapes the default chain, so like the slot it only exists with the
+            // defaults; it is registered once because it stands for a slot, the way the defaults are.
+            if (!fillsSlot)
+                services.AddTransient(typeof(IPipelineBehavior<,>), behaviorType);
+            else if (ShouldUseDefaults)
+                AddBehaviorOnce(services, behaviorType);
         }
     }
 
@@ -244,7 +403,9 @@ public sealed class MediatorConfiguration
     /// </summary>
     private void RegisterDefaultBehaviors(IServiceCollection services)
     {
-        foreach (var slot in Catalog.Available(SuppressedDefaults))
+        // A replacement placed after the defaults is registered with the added behaviors instead, in the
+        // order of the configuration calls.
+        foreach (var slot in Catalog.AvailableInSlot(SuppressedDefaults))
         {
             AddBehaviorOnce(services, slot.Value);
         }

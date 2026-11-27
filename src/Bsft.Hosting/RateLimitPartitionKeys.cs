@@ -45,14 +45,19 @@ internal static class RateLimitPartitionKeys
     /// <param name="limiter">The limiter's options.</param>
     /// <param name="selector">The custom selector, when the limiter partitions by one.</param>
     /// <param name="context">The request being limited.</param>
+    /// <param name="customKeyPrefix">The prefix of a custom selector's key.</param>
     /// <returns>The partition key.</returns>
-    internal static string For(PolicyLimiterOptions limiter, Func<HttpContext, string?>? selector, HttpContext context)
+    internal static string For(
+        PolicyLimiterOptions limiter,
+        Func<HttpContext, string?>? selector,
+        HttpContext context,
+        string customKeyPrefix = BsftRateLimitingOptions.DefaultCustomPartitionKeyPrefix)
         => limiter.PartitionBy switch
         {
             RateLimitPartitionKind.Global => GlobalKey,
             RateLimitPartitionKind.Principal when PrincipalKey(context, limiter.ClaimType) is { } principal
                 => "principal:" + principal,
-            RateLimitPartitionKind.Custom when selector?.Invoke(context) is { Length: > 0 } custom => "custom:" + custom,
+            RateLimitPartitionKind.Custom when selector?.Invoke(context) is { Length: > 0 } custom => customKeyPrefix + custom,
             _ => "address:" + ClientAddress(context)
         };
 

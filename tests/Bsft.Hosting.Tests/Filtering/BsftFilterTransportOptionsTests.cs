@@ -15,6 +15,7 @@ public class BsftFilterTransportOptionsTests
         options.MaxJsonReaderDepth.Should().Be(BsftFilterTransportOptions.DefaultMaxJsonReaderDepth);
         options.MaxDepth.Should().Be(BsftFilterTransportOptions.DefaultMaxDepth);
         options.MaxNodeCount.Should().Be(BsftFilterTransportOptions.DefaultMaxNodeCount);
+        options.MaxPageSize.Should().Be(BsftFilterTransportOptions.DefaultMaxPageSize);
 
         var act = () => options.Validate();
         act.Should().NotThrow();
@@ -71,4 +72,25 @@ public class BsftFilterTransportOptionsTests
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*MaxJsonReaderDepth*");
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_NonPositiveMaxPageSize_Throws(int value)
+    {
+        var options = new BsftFilterTransportOptions { MaxPageSize = value };
+
+        var act = () => options.Validate();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*MaxPageSize*");
+    }
+
+    [Fact]
+    public void MaxPageSize_Default_Is100()
+    {
+        var options = new BsftFilterTransportOptions();
+
+        options.MaxPageSize.Should().Be(100);
+    }
 }
+

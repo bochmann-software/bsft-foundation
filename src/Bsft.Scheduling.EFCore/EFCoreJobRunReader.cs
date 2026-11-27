@@ -22,11 +22,17 @@ internal sealed class EFCoreJobRunReader : IJobRunReader
     private const string LikeEscape = "\\";
 
     private readonly IJobDbContext _db;
+    private readonly IJobRunMapper _mapper;
 
     /// <summary>Initializes a new instance of the <see cref="EFCoreJobRunReader"/> class.</summary>
     /// <param name="db">The context holding the runs.</param>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="db"/> is null.</exception>
-    public EFCoreJobRunReader(IJobDbContext db) => _db = db ?? throw new ArgumentNullException(nameof(db));
+    /// <param name="mapper">Reads the result a row carries.</param>
+    /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
+    public EFCoreJobRunReader(IJobDbContext db, IJobRunMapper mapper)
+    {
+        _db = db ?? throw new ArgumentNullException(nameof(db));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+    }
 
     /// <inheritdoc />
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="request"/> is null.</exception>
@@ -177,7 +183,7 @@ internal sealed class EFCoreJobRunReader : IJobRunReader
     /// <summary>Reads one row as the listing shows it.</summary>
     /// <param name="entity">The row.</param>
     /// <returns>The summary.</returns>
-    private static JobRunSummary Summarize(JobRunEntity entity) => new(
+    private JobRunSummary Summarize(JobRunEntity entity) => new(
         entity.Id,
         entity.JobName,
         Moment(entity.DueAt),
@@ -187,7 +193,10 @@ internal sealed class EFCoreJobRunReader : IJobRunReader
         entity.AttemptCount,
         entity.LeaseOwner,
         Moment(entity.LeaseExpiresAt),
-        Moment(entity.SettledAt));
+        Moment(entity.SettledAt))
+    {
+        Result = _mapper.ToResult(entity),
+    };
 
     /// <summary>Reads a stored instant as an offset in UTC.</summary>
     /// <param name="value">The stored instant.</param>

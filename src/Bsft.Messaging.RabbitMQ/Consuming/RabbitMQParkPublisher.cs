@@ -30,6 +30,7 @@ internal sealed class RabbitMQParkPublisher : IRabbitMQParkPublisher
     private readonly IRabbitMQMessageMapper _mapper;
     private readonly RabbitMQTopology _topology;
     private readonly RabbitMQConnectionSettings _settings;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<RabbitMQParkPublisher> _logger;
 
     /// <summary>
@@ -39,6 +40,7 @@ internal sealed class RabbitMQParkPublisher : IRabbitMQParkPublisher
     /// <param name="mapper">The mapper building the properties of the parked copy.</param>
     /// <param name="topology">The resolved names, supplying the dead-letter exchange.</param>
     /// <param name="settings">The settings, supplying the confirm timeout.</param>
+    /// <param name="timeProvider">The clock the confirm window runs on.</param>
     /// <param name="logger">The logger used to report parked messages and failed preservations.</param>
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     public RabbitMQParkPublisher(
@@ -46,12 +48,14 @@ internal sealed class RabbitMQParkPublisher : IRabbitMQParkPublisher
         IRabbitMQMessageMapper mapper,
         RabbitMQTopology topology,
         RabbitMQConnectionSettings settings,
+        TimeProvider timeProvider,
         ILogger<RabbitMQParkPublisher> logger)
     {
         _channelProvider = channelProvider ?? throw new ArgumentNullException(nameof(channelProvider));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _topology = topology ?? throw new ArgumentNullException(nameof(topology));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -76,8 +80,8 @@ internal sealed class RabbitMQParkPublisher : IRabbitMQParkPublisher
             // that — from blocking this park forever. The caller's token is the host's stopping token,
             // which nothing cancels while the host runs, so without the window there is no deadline at
             // all, and parking is the terminal step of a strictly sequential consume loop.
-            using var confirmWindow = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            confirmWindow.CancelAfter(_settings.PublisherConfirmTimeout);
+            using var confirmTimeout = new CancellationTokenSource(_settings.PublisherConfirmTimeout, _timeProvider);
+            using var confirmWindow = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, confirmTimeout.Token);
 
             await channel
                 .PublishAsync(

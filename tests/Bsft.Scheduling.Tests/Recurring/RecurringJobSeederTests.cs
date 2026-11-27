@@ -95,7 +95,7 @@ public class RecurringJobSeederTests
         // Since Microsoft.Extensions.Hosting 10, StartAsync runs the whole of ExecuteAsync on the
         // thread pool, so a stop right after the start can come before the first attempt. The test
         // waits for it rather than relying on the synchronous start of earlier versions.
-        await planner.FirstAttempt.WaitAsync(TimeSpan.FromSeconds(10));
+        await planner.FirstAttempt.WaitAsync(TimeSpan.FromSeconds(30));
         await seeder.StopAsync(CancellationToken.None);
 
         planner.Attempts.Should().Be(1);

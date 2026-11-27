@@ -1,8 +1,11 @@
+using Bsft.Retention;
+using Bsft.Retention.DependencyInjection;
 using Bsft.Scheduling.Reading;
 using Bsft.Scheduling.StoredSchedules;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace Bsft.Scheduling.EFCore.DependencyInjection;
 
@@ -87,6 +90,46 @@ public static class SchedulingEFCoreServiceCollectionExtensions
 
         services.RemoveAll<IStoredScheduleStore>();
         services.AddSingleton<IStoredScheduleStore, EFCoreStoredScheduleStore>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers <see cref="JobRunRetentionPass"/> and the framework's retention sweeper over it, so settled
+    /// job runs are deleted once they are older than <see cref="BsftSchedulingOptions.JobRunRetention"/>.
+    /// Requires <see cref="AddBsftSchedulingEFCore{TContext}"/> to already be registered, for the
+    /// <see cref="IJobDbContext"/> mapping it reads through.
+    /// </summary>
+    /// <param name="services">The service collection to add to.</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// A call of its own rather than part of the store registration: a settled run is the record an operator
+    /// reads to find out what ran and why it failed, and deleting it is not reversible, so it takes both
+    /// this call and a window on <see cref="BsftSchedulingOptions.JobRunRetention"/> rather than one value a
+    /// host might set for an unrelated reason.
+    /// </para>
+    /// <para>
+    /// The window stays on <see cref="BsftSchedulingOptions"/>, where a host already configures the
+    /// scheduler, and is copied onto the sweeper's named options after that type has been bound. The pacing,
+    /// the batch size and the startup offset are <c>BsftRetentionOptions</c> under this pass's name, and a
+    /// host that does not touch them gets the framework's defaults.
+    /// </para>
+    /// </remarks>
+    public static IServiceCollection AddBsftJobRunEFCoreRetention(this IServiceCollection services)
+    {
+        if (services is null)
+            throw new ArgumentNullException(nameof(services));
+
+        services.AddBsftRetention<JobRunRetentionPass>();
+
+        // Configured against the bound options rather than read at registration time, because this call
+        // may come before the section is bound. Registered after the sweeper's own Configure, so this
+        // wins: the scheduling options are the source of truth for the window.
+        services.AddOptions<BsftRetentionOptions>(BsftRetentionOptions.NameFor<JobRunRetentionPass>())
+            .Configure<IOptions<BsftSchedulingOptions>>(
+                (retention, scheduling) => retention.RetentionPeriod = scheduling.Value.JobRunRetention);
 
         return services;
     }

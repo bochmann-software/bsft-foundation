@@ -150,4 +150,48 @@ public sealed class RateLimitPartitionKeysTests
 
         key.Should().Be("address:203.0.113.5");
     }
+
+    [Fact]
+    public void For_CustomSelectorWithOwnPrefix_ReturnsThatPrefixed()
+    {
+        var options = new PolicyLimiterOptions { PartitionBy = RateLimitPartitionKind.Custom };
+
+        var key = RateLimitPartitionKeys.For(options, _ => "k1", new DefaultHttpContext(), "api:");
+
+        key.Should().Be("api:k1");
+    }
+
+    [Fact]
+    public void For_CustomSelectorWithEmptyPrefix_ReturnsTheKeyAsItIs()
+    {
+        var options = new PolicyLimiterOptions { PartitionBy = RateLimitPartitionKind.Custom };
+
+        var key = RateLimitPartitionKeys.For(options, _ => "k1", new DefaultHttpContext(), customKeyPrefix: "");
+
+        key.Should().Be("k1");
+    }
+
+    [Fact]
+    public void KeyFor_LinkOfOptionsWithPrefix_UsesTheConfiguredPrefix()
+    {
+        var rateLimiting = new BsftRateLimitingOptions { CustomPartitionKeyPrefix = "api:" };
+        rateLimiting.PartitionKeySelectors["s"] = _ => "k1";
+        using var link = new PolicyLimiterLink(
+            new PolicyLimiterOptions { PartitionBy = RateLimitPartitionKind.Custom, PartitionKeySelector = "s" },
+            rateLimiting);
+
+        link.KeyFor(new DefaultHttpContext()).Should().Be("api:k1");
+    }
+
+    [Fact]
+    public void KeyFor_LinkOfDefaultOptions_KeepsTheCustomPrefix()
+    {
+        var rateLimiting = new BsftRateLimitingOptions();
+        rateLimiting.PartitionKeySelectors["s"] = _ => "k1";
+        using var link = new PolicyLimiterLink(
+            new PolicyLimiterOptions { PartitionBy = RateLimitPartitionKind.Custom, PartitionKeySelector = "s" },
+            rateLimiting);
+
+        link.KeyFor(new DefaultHttpContext()).Should().Be("custom:k1");
+    }
 }

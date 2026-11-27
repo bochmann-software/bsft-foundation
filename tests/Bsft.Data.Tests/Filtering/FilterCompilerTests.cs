@@ -413,11 +413,12 @@ public class FilterCompilerTests
     [Fact]
     public void BuildStringComparison_UnsupportedOperator_ThrowsInvalidOperationException()
     {
-        // Exercises FilterCompiler.BuildStringComparison line 72: _ => throw new InvalidOperationException.
-        // BuildStringComparison is private static and only reachable via IsStringOperation gating.
+        // Exercises FilterStringCompiler.Compare: _ => throw new InvalidOperationException.
+        // Compare is internal static and only reachable via IsStringOperation gating.
         // We call it directly via reflection to cover the default arm that IsStringOperation prevents.
-        var buildStringComparison = typeof(FilterCompiler)
-            .GetMethod("BuildStringComparison", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var buildStringComparison = typeof(FilterCompiler).Assembly
+            .GetType("Bsft.Data.Filtering.FilterStringCompiler", throwOnError: true)!
+            .GetMethod("Compare", BindingFlags.NonPublic | BindingFlags.Static)!;
 
         // Create dummy expressions for the member and value parameters (string type).
         var memberExpr = Expression.Constant("test");

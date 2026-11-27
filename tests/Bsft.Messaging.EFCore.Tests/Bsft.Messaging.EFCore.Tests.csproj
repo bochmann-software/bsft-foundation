@@ -1,5 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\PostgresTestServer.cs" Link="Shared\PostgresTestServer.cs" />
+    <Compile Include="..\Shared\PostgresFactAttribute.cs" Link="Shared\PostgresFactAttribute.cs" />
+    <Compile Include="..\Shared\PollIntervalCounts.cs" Link="Shared\PollIntervalCounts.cs" />
+    <Compile Include="..\Shared\SignallingScopeFactory.cs" Link="Shared\SignallingScopeFactory.cs" />
+    <Compile Include="..\Shared\PollIntervalProbe.cs" Link="Shared\PollIntervalProbe.cs" />
+    <Compile Include="..\Shared\ManualTimeProvider.cs" Link="Shared\ManualTimeProvider.cs" />
     <Compile Include="..\Shared\RecordingLogger.cs" Link="Shared\RecordingLogger.cs" />
   </ItemGroup>
 
@@ -21,6 +27,8 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- The tenant-keyed outbox and inbox against a real PostgreSQL server (BSFT_TEST_POSTGRES). -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="Microsoft.Extensions.Logging" />

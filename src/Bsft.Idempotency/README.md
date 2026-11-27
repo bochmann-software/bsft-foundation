@@ -30,6 +30,13 @@ The pipeline half is a second call, and its position matters: `app.UseBsftIdempo
 `UseBsftDefaults()`, after `UseRouting()` and after authentication. Then opt an endpoint in with
 `[Idempotent]` on a controller action or `.RequireIdempotency()` on a minimal-API route group.
 
+A route whose response carries a secret (a minted client secret, an API key) adds
+`[SensitiveIdempotentResponse]` or `.WithSensitiveResponse()`: its stored replay body is
+encrypted at rest with ASP.NET Core Data Protection, which `AddBsftIdempotency` registers, and a replay
+that cannot decrypt it answers 409 `IDEMPOTENCY_RESPONSE_WITHHELD` (the secret was issued; rotate it).
+Replicas share one key ring for replays to work across them. Without the marker nothing changes. See
+the topic page, "Responses that carry a secret".
+
 ## Configure
 
 | Option | Default | Effect |
@@ -57,8 +64,10 @@ refusing concurrent requests.
 - `IIdempotencyStore` — where records live. The default is in-process and is not enough for two
   replicas; `Bsft.Idempotency.EFCore` replaces it with a shared table.
 - `IIdempotencyFingerprintContributor` — adds or removes a segment of the request fingerprint.
-- `IIdempotencyAuditSink` — receives replay, key-reuse and in-progress decisions. The default
-  discards them.
+- `IIdempotencyAuditSink` — receives replay, key-reuse, in-progress and withheld-replay decisions. The
+  default discards them.
+- `IDataProtectionProvider` — seals sensitive replay bodies; configure the key ring as for any ASP.NET
+  Core host.
 
 ## Documentation
 

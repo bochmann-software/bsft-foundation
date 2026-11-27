@@ -1,5 +1,6 @@
 using Bsft.Hosting.BackgroundWork.Pipelines;
 using Bsft.Hosting.BackgroundWork.Tests.Pipelines.Fakes;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -9,6 +10,40 @@ namespace Bsft.Hosting.BackgroundWork.Tests.Pipelines;
 
 public sealed class BatchingWriterWorkerTests
 {
+    [Fact]
+    public async Task BatchingWriterWorker_WithAPendingStartGate_CommitsNothingUntilItOpens()
+    {
+        var gate = new ControllableStartGate();
+        using var host = new PipelineHost(options => options.MaxBatchSize = 1, gate: gate);
+        host.Buffer.TryEnqueue(new SampleItem(1));
+
+        await host.StartAsync();
+        await gate.Awaited;
+
+        host.Committer.Batches.Should().BeEmpty();
+        gate.Open();
+        await host.Committer.WaitForBatchesAsync(1);
+        await host.StopAsync();
+
+        host.Committer.Batches.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task BatchingWriterWorker_StoppedWhileAStartGateIsPending_CommitsNothingNotEvenTheFinalFlush()
+    {
+        var gate = new ControllableStartGate();
+        using var host = new PipelineHost(gate: gate);
+        host.Buffer.TryEnqueue(new SampleItem(1));
+
+        await host.StartAsync();
+        await gate.Awaited;
+        await host.StopAsync();
+
+        host.Committer.Batches.Should().BeEmpty();
+        host.Writer.Entries.Should().NotContain(entry => entry.Level == LogLevel.Error);
+        host.Counters.Committed.Should().Be(0);
+    }
+
     [Fact]
     public async Task BatchingWriterWorker_WhenItemsExceedTheBatchSize_CommitsThemInBatchesOfAtMostThatSize()
     {
@@ -124,6 +159,34 @@ public sealed class BatchingWriterWorkerTests
 
         host.Committer.Items.Select(item => item.Id).Should().BeEquivalentTo([1, 2, 3, 4, 5]);
         host.Counters.Committed.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task BatchingWriterWorker_WhenAFullBatchIsStillQueuedAtTheStop_FlushesItAsABatchOfTheMaximumSize()
+    {
+        using var host = new PipelineHost(options =>
+        {
+            options.FlushInterval = TimeSpan.FromHours(1);
+            options.MaxBatchSize = 2;
+            options.Capacity = 8;
+        });
+        var gate = new TaskCompletionSource();
+        host.Committer.Behavior = (number, _) => number == 1 ? gate.Task : Task.CompletedTask;
+        foreach (var id in Enumerable.Range(1, 2))
+            host.Buffer.TryEnqueue(new SampleItem(id));
+        await host.StartAsync();
+        await host.Committer.WaitForBatchesAsync(1);
+        foreach (var id in Enumerable.Range(3, 3))
+            host.Buffer.TryEnqueue(new SampleItem(id));
+
+        var stop = host.StopAsync();
+        gate.SetResult();
+        await stop;
+
+        host.Committer.Batches.Select(batch => string.Join(",", batch.Select(item => item.Id))).Should()
+            .Equal("1,2", "3,4", "5");
+        host.Counters.Committed.Should().Be(5);
+        host.Counters.FailedBatches.Should().Be(0);
     }
 
     [Fact]
@@ -304,7 +367,7 @@ public sealed class BatchingWriterWorkerTests
         await worker.StartAsync(CancellationToken.None);
         host.Buffer.TryEnqueue(new SampleItem(1));
         await host.Clock.WaitForTimerAsync(TimeSpan.FromSeconds(1));
-        await WaitUntilAsync(() => source.HasReadTheItem);
+        await source.ItemRead.WaitAsync(TimeSpan.FromSeconds(30));
 
         worker.Dispose();
         await worker.StopAsync(CancellationToken.None);
@@ -312,11 +375,41 @@ public sealed class BatchingWriterWorkerTests
         host.Committer.Batches.Should().BeEmpty();
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
+    /// <summary>A reader that reports the first item taken through it.</summary>
+    private sealed class SignallingReader(
+        System.Threading.Channels.ChannelReader<SampleItem> inner,
+        TaskCompletionSource itemRead,
+        ManualResetEventSlim loopWaitedAgain) : System.Threading.Channels.ChannelReader<SampleItem>
     {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!condition() && DateTime.UtcNow < deadline)
-            await Task.Delay(1);
+        private int _waits;
+
+        public override Task Completion => inner.Completion;
+
+        public override bool CanCount => inner.CanCount;
+
+        public override int Count => inner.Count;
+
+        public override bool TryRead(out SampleItem item)
+        {
+            var read = inner.TryRead(out item!);
+            if (read)
+                itemRead.TrySetResult();
+
+            return read;
+        }
+
+        /// <remarks>
+        /// The first wait starts the loop, the second is the batch window that the disposal wakes, and the
+        /// third is the loop coming back for more once it has dealt with the batch it held, which is after
+        /// the commit it must not make.
+        /// </remarks>
+        public override ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _waits) >= 3)
+                loopWaitedAgain.Set();
+
+            return inner.WaitToReadAsync(cancellationToken);
+        }
     }
 
     /// <summary>
@@ -327,21 +420,28 @@ public sealed class BatchingWriterWorkerTests
     {
         private readonly IBoundedBufferSource<SampleItem> _inner;
         private readonly RecordingBatchCommitter _committer;
+        private readonly TaskCompletionSource _itemRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ManualResetEventSlim _loopWaitedAgain = new(false);
 
         public WakingSource(IBoundedBufferSource<SampleItem> inner, RecordingBatchCommitter committer)
         {
             _inner = inner;
             _committer = committer;
+            Reader = new SignallingReader(inner.Reader, _itemRead, _loopWaitedAgain);
         }
 
-        public bool HasReadTheItem => _inner.Reader.Count == 0;
+        /// <summary>Gets a task that completes once the loop has taken an item off the buffer.</summary>
+        public Task ItemRead => _itemRead.Task;
 
-        public System.Threading.Channels.ChannelReader<SampleItem> Reader => _inner.Reader;
+        public System.Threading.Channels.ChannelReader<SampleItem> Reader { get; }
 
         public void Complete()
         {
             _inner.Complete();
-            SpinWait.SpinUntil(() => _committer.Batches.Count > 0, TimeSpan.FromMilliseconds(250));
+
+            // The loop is back for more only after it has dealt with the batch it held, so a commit that
+            // the disposal should have prevented has happened by the time this returns.
+            _loopWaitedAgain.Wait(TimeSpan.FromSeconds(30)).Should().BeTrue();
         }
     }
 

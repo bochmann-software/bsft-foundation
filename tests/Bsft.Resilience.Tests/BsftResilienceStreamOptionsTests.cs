@@ -15,7 +15,7 @@ public class BsftResilienceStreamOptionsTests
         options.MaxDelay.Should().Be(TimeSpan.FromSeconds(30));
         options.UseJitter.Should().BeTrue();
         options.PartialStreamPolicy.Should().Be(PartialStreamPolicy.RethrowMidStream);
-        options.TimeProvider.Should().BeSameAs(TimeProvider.System);
+        options.TimeProvider.Should().BeNull("the options take no clock of their own, the caller names the one the retries wait on");
         options.ShouldRetry.Should().NotBeNull();
     }
 
@@ -30,7 +30,7 @@ public class BsftResilienceStreamOptionsTests
     [Fact]
     public void Validate_Defaults_Passes()
     {
-        var act = new BsftResilienceStreamOptions().Validate;
+        var act = new BsftResilienceStreamOptions { TimeProvider = TimeProvider.System }.Validate;
 
         act.Should().NotThrow();
     }
@@ -68,7 +68,7 @@ public class BsftResilienceStreamOptionsTests
     /// <param name="member">The member the message must name.</param>
     private static void Rejects(Action<BsftResilienceStreamOptions> @break, string member)
     {
-        var options = new BsftResilienceStreamOptions();
+        var options = new BsftResilienceStreamOptions { TimeProvider = TimeProvider.System };
         @break(options);
 
         var act = options.Validate;

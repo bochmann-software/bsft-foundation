@@ -263,10 +263,12 @@ public class SearchExecutorTests : IDisposable
         FluentActions.Invoking(() => new CompiledSearchConfiguration<Candidate, CandidateDto>(null!))
             .Should().Throw<ArgumentNullException>().WithParameterName("configuration");
 
-        FluentActions.Invoking(() => new SearchExecutor<Candidate, CandidateDto>(null!, _telemetry, _provider))
+        FluentActions.Invoking(() => new SearchExecutor<Candidate, CandidateDto>(null!, _telemetry, TimeProvider.System, _provider))
             .Should().Throw<ArgumentNullException>().WithParameterName("configuration");
-        FluentActions.Invoking(() => new SearchExecutor<Candidate, CandidateDto>(configuration, null!, _provider))
+        FluentActions.Invoking(() => new SearchExecutor<Candidate, CandidateDto>(configuration, null!, TimeProvider.System, _provider))
             .Should().Throw<ArgumentNullException>().WithParameterName("telemetry");
+        FluentActions.Invoking(() => new SearchExecutor<Candidate, CandidateDto>(configuration, _telemetry, null!, _provider))
+            .Should().Throw<ArgumentNullException>().WithParameterName("timeProvider");
     }
 
     [Fact]
@@ -278,6 +280,7 @@ public class SearchExecutorTests : IDisposable
         var executor = new SearchExecutor<Candidate, CandidateDto>(
             new CompiledSearchConfiguration<Candidate, CandidateDto>(new CandidateQueryConfiguration()),
             _telemetry,
+            TimeProvider.System,
             searchProvider: null,
             new FixedScopeProvider(FullScope));
 
@@ -398,6 +401,7 @@ public class SearchExecutorTests : IDisposable
         SearchScopeState? scope) =>
         new(new CompiledSearchConfiguration<Candidate, CandidateDto>(configuration),
             _telemetry,
+            TimeProvider.System,
             _provider,
             // A scoped group without a registered provider fails closed, so the tests that are not
             // about scoping pass one that restricts nothing.
@@ -412,7 +416,7 @@ public class SearchExecutorTests : IDisposable
     /// <summary>An executor for an application that registered no scope provider at all.</summary>
     private SearchExecutor<Candidate, CandidateDto> CreateUnscopedProviderExecutor(
         QueryConfigurationBase<Candidate, CandidateDto> configuration) =>
-        new(new CompiledSearchConfiguration<Candidate, CandidateDto>(configuration), _telemetry, _provider);
+        new(new CompiledSearchConfiguration<Candidate, CandidateDto>(configuration), _telemetry, TimeProvider.System, _provider);
 
     private sealed class UnscopedQueryConfiguration : QueryConfigurationBase<Candidate, CandidateDto>
     {

@@ -358,6 +358,45 @@ public class EFCoreJobStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task SettleAsyncStoresTheResultTheRunCarries()
+    {
+        var run = Run("mail-dispatch", _now.AddMinutes(-1));
+        await _store.EnqueueAsync(run);
+        var claimed = await _store.ClaimAsync(run, "instance-1", _now, _now.AddMinutes(5));
+        claimed!.Result = TestRunResults.Of("mail-dispatch/v1", """{"sent":118,"failed":2}""");
+
+        await _store.SettleAsync(claimed, JobRunStatus.Completed, _now.AddMinutes(2));
+
+        var stored = await _store.FindAsync(run.Id);
+        stored!.Result.Should().Be(TestRunResults.Of("mail-dispatch/v1", """{"sent":118,"failed":2}"""));
+    }
+
+    [Fact]
+    public async Task SettleAsyncLeavesARunWithoutAResultWithoutOne()
+    {
+        var run = Run("report", _now.AddMinutes(-1));
+        await _store.EnqueueAsync(run);
+        var claimed = await _store.ClaimAsync(run, "instance-1", _now, _now.AddMinutes(5));
+
+        await _store.SettleAsync(claimed!, JobRunStatus.Completed, _now.AddMinutes(2));
+
+        (await _store.FindAsync(run.Id))!.Result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RetryAsyncStoresNoResultForTheAttemptThatFailed()
+    {
+        var run = Run("mail-dispatch", _now.AddMinutes(-1));
+        await _store.EnqueueAsync(run);
+        var claimed = await _store.ClaimAsync(run, "instance-1", _now, _now.AddMinutes(5));
+        claimed!.Result = TestRunResults.Of("mail-dispatch/v1", """{"sent":1}""");
+
+        await _store.RetryAsync(claimed, _now.AddMinutes(10));
+
+        (await _store.FindAsync(run.Id))!.Result.Should().BeNull();
+    }
+
+    [Fact]
     public async Task SettleAsyncWritesNothingOnceTheLeaseHasBeenLost()
     {
         var run = Run("report", _now.AddMinutes(-1));

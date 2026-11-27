@@ -430,4 +430,118 @@ public class BsftRateLimitingOptionsValidatorTests
         limiter.QueueLimit.Should().Be(0);
         limiter.RetryAfterSeconds.Should().BeNull();
     }
+
+    private static string Fail(BsftRateLimitingOptions options)
+    {
+        var result = new BsftRateLimitingOptionsValidator().Validate(name: null, options);
+        result.Failed.Should().BeTrue();
+        return result.FailureMessage!;
+    }
+
+    private static BsftRateLimitingOptions WithLimiter(PolicyLimiterOptions limiter)
+    {
+        var options = new BsftRateLimitingOptions();
+        options.Policies["p"] = new RateLimitPolicyOptions { Limiters = { limiter } };
+        return options;
+    }
+
+    [Fact]
+    public void Validate_WithRootWindowBelowOneSecond_Fails()
+    {
+        Fail(new BsftRateLimitingOptions { Window = TimeSpan.FromMilliseconds(500) })
+            .Should().Contain("Bsft:Hosting:RateLimiting:Window must be at least one second.");
+    }
+
+    [Fact]
+    public void Validate_WithRootWindowAndDisagreeingWindowSeconds_Fails()
+    {
+        Fail(new BsftRateLimitingOptions { Window = TimeSpan.FromSeconds(30), WindowSeconds = 90 })
+            .Should().Contain("Bsft:Hosting:RateLimiting:Window (00:00:30) and WindowSeconds (90) disagree");
+    }
+
+    [Theory]
+    [InlineData(60, 30)]
+    [InlineData(30, 30)]
+    public void Validate_WithRootWindowAndUnchangedOrAgreeingWindowSeconds_Succeeds(int seconds, int windowSeconds)
+    {
+        var options = new BsftRateLimitingOptions { Window = TimeSpan.FromSeconds(windowSeconds), WindowSeconds = seconds };
+
+        new BsftRateLimitingOptionsValidator().Validate(name: null, options).Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_WithLimiterWindowBelowOneSecond_FailsNamingThePath()
+    {
+        var options = WithLimiter(new PolicyLimiterOptions { Window = TimeSpan.Zero });
+
+        Fail(options).Should().Contain("Bsft:Hosting:RateLimiting:Policies:p:Limiters:0:Window must be at least one second.");
+    }
+
+    [Fact]
+    public void Validate_WithLimiterWindowAndDisagreeingWindowSeconds_Fails()
+    {
+        var options = WithLimiter(new PolicyLimiterOptions { Window = TimeSpan.FromSeconds(30), WindowSeconds = 90 });
+
+        Fail(options).Should().Contain("Policies:p:Limiters:0:Window (00:00:30) and WindowSeconds (90) disagree");
+    }
+
+    [Fact]
+    public void Validate_WithConcurrencyLimiterAndTinyWindow_Succeeds()
+    {
+        var options = WithLimiter(new PolicyLimiterOptions { Kind = RateLimiterKind.Concurrency, Window = TimeSpan.Zero });
+
+        new BsftRateLimitingOptionsValidator().Validate(name: null, options).Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_WithValidGlobalLimiter_Succeeds()
+    {
+        var options = new BsftRateLimitingOptions
+        {
+            GlobalLimiter = new PolicyLimiterOptions { Window = TimeSpan.FromSeconds(30) }
+        };
+
+        new BsftRateLimitingOptionsValidator().Validate(name: null, options).Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_WithInvalidGlobalLimiter_FailsNamingThePath()
+    {
+        var options = new BsftRateLimitingOptions
+        {
+            GlobalLimiter = new PolicyLimiterOptions { PermitLimit = 0 }
+        };
+
+        Fail(options).Should().Contain("Bsft:Hosting:RateLimiting:GlobalLimiter:PermitLimit must be at least one.");
+    }
+
+    [Fact]
+    public void Validate_WithGlobalLimiterNamingAnUnregisteredSelector_Fails()
+    {
+        var options = new BsftRateLimitingOptions
+        {
+            GlobalLimiter = new PolicyLimiterOptions
+            {
+                PartitionBy = RateLimitPartitionKind.Custom,
+                PartitionKeySelector = "missing"
+            }
+        };
+
+        Fail(options).Should().Contain("Bsft:Hosting:RateLimiting:GlobalLimiter:PartitionKeySelector");
+    }
+
+    [Fact]
+    public void Validate_WithNullCustomPartitionKeyPrefix_Fails()
+    {
+        Fail(new BsftRateLimitingOptions { CustomPartitionKeyPrefix = null! })
+            .Should().Contain("Bsft:Hosting:RateLimiting:CustomPartitionKeyPrefix must not be null.");
+    }
+
+    [Fact]
+    public void Validate_WithEmptyCustomPartitionKeyPrefix_Succeeds()
+    {
+        new BsftRateLimitingOptionsValidator()
+            .Validate(name: null, new BsftRateLimitingOptions { CustomPartitionKeyPrefix = "" })
+            .Succeeded.Should().BeTrue();
+    }
 }

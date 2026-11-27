@@ -8,6 +8,8 @@ namespace Bsft.Hosting;
 /// </summary>
 public sealed class PolicyLimiterOptions
 {
+    private const int DefaultSegmentsPerWindow = 4;
+
     /// <summary>Gets or sets the algorithm. Defaults to <see cref="RateLimiterKind.FixedWindow"/>.</summary>
     public RateLimiterKind Kind { get; set; } = RateLimiterKind.FixedWindow;
 
@@ -36,19 +38,30 @@ public sealed class PolicyLimiterOptions
     /// size for a token bucket, and requests in flight at once for a concurrency limiter. Defaults to 100;
     /// must be at least one.
     /// </summary>
-    public int PermitLimit { get; set; } = 100;
+    public int PermitLimit { get; set; } = BsftRateLimitingOptions.DefaultPermitLimit;
 
     /// <summary>
     /// Gets or sets the window of a fixed or sliding window, and the replenishment period of a token bucket,
     /// in seconds. Defaults to 60; must be at least one. A concurrency limiter ignores it.
     /// </summary>
-    public int WindowSeconds { get; set; } = 60;
+    public int WindowSeconds { get; set; } = BsftRateLimitingOptions.DefaultWindowSeconds;
+
+    /// <summary>
+    /// Gets or sets the window as a time span, bound from strings such as <c>00:00:30</c>.
+    /// <see langword="null"/>, the default, uses <see cref="WindowSeconds"/>. When set it takes precedence over
+    /// <see cref="WindowSeconds"/>; changing both to values that disagree is a validation failure. Must be at
+    /// least one second. A concurrency limiter ignores it.
+    /// </summary>
+    public TimeSpan? Window { get; set; }
+
+    /// <summary>Gets the window the limiter uses: <see cref="Window"/> when set, else <see cref="WindowSeconds"/>.</summary>
+    internal TimeSpan EffectiveWindow => Window ?? TimeSpan.FromSeconds(WindowSeconds);
 
     /// <summary>
     /// Gets or sets the segments a sliding window is divided into. Defaults to 4; must be at least one. Only
     /// a sliding window reads it.
     /// </summary>
-    public int SegmentsPerWindow { get; set; } = 4;
+    public int SegmentsPerWindow { get; set; } = DefaultSegmentsPerWindow;
 
     /// <summary>
     /// Gets or sets the tokens a token bucket gains per replenishment period. Defaults to 1; must be at least

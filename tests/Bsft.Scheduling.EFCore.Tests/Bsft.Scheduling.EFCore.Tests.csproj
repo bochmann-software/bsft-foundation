@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\Shared\PostgresTestServer.cs" Link="Shared\PostgresTestServer.cs" />
+    <Compile Include="..\Shared\PostgresFactAttribute.cs" Link="Shared\PostgresFactAttribute.cs" />
     <ProjectReference Include="..\..\src\Bsft.Scheduling.EFCore\Bsft.Scheduling.EFCore.csproj" />
     <!-- Not referenced by the package under test; only tests/Shared/RelationalModelWarmup.cs needs it,
          to reuse Bsft.Data's runtime-model warm-up instead of rebuilding it. -->
@@ -13,5 +15,6 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
   </ItemGroup>
 </Project>

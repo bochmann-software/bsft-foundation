@@ -21,6 +21,8 @@ public class JobRunEntityTests
         entity.LeaseOwner.Should().BeNull();
         entity.LeaseExpiresAt.Should().BeNull();
         entity.SettledAt.Should().BeNull();
+        entity.ResultSchema.Should().BeNull();
+        entity.Result.Should().BeNull();
         entity.ConcurrencyToken.Should().BeEmpty();
     }
 
@@ -43,6 +45,8 @@ public class JobRunEntityTests
             LeaseOwner = "instance-1",
             LeaseExpiresAt = due.AddMinutes(5),
             SettledAt = due.AddMinutes(7),
+            ResultSchema = "report/v1",
+            Result = "{\"rows\":3}",
             ConcurrencyToken = token,
         };
 
@@ -57,6 +61,8 @@ public class JobRunEntityTests
         entity.LeaseOwner.Should().Be("instance-1");
         entity.LeaseExpiresAt.Should().Be(due.AddMinutes(5));
         entity.SettledAt.Should().Be(due.AddMinutes(7));
+        entity.ResultSchema.Should().Be("report/v1");
+        entity.Result.Should().Be("{\"rows\":3}");
         entity.ConcurrencyToken.Should().Be(token);
     }
 }

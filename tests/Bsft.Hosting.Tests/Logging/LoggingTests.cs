@@ -1,6 +1,7 @@
 using Bsft.Hosting.DependencyInjection;
 using Bsft.Hosting.Logging;
 using Bsft.Logging;
+using Bsft.Tests.Shared;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -117,19 +118,6 @@ public class LoggingTests
     }
 
     [Fact]
-    public void BsftDefaults_IncludesLogging()
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
-        services.AddBsftDefaults();
-
-        var provider = services.BuildServiceProvider();
-        var loggerFactory = provider.GetService<ILoggerFactory>();
-
-        loggerFactory.Should().NotBeNull();
-    }
-
-    [Fact]
     public void AddBsftHostLogging_ThrowsOnNullServices()
     {
         IServiceCollection services = null!;
@@ -203,10 +191,12 @@ public class LoggingTests
     }
 
     [Fact]
-    public async Task AddBsftHostLogging_ContainerDisposed_DisposesTheFileProvider()
+    public void AddBsftHostLogging_ContainerDisposed_DisposesTheFileProvider()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "bsft-hosting-logging-" + Guid.NewGuid().ToString("N"));
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
         var services = new ServiceCollection();
+        services.AddSingleton<TimeProvider>(clock);
         services.AddBsftHostLogging(options =>
         {
             options.EnableConsole = false;
@@ -217,56 +207,22 @@ public class LoggingTests
         try
         {
             var provider = services.BuildServiceProvider();
-            var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger("Shutdown");
+            _ = provider.GetRequiredService<ILoggerFactory>();
+
+            // The file provider arms its flush interval on the injected clock and disposes that timer in
+            // its own Dispose, so a timer that is gone is the observable proof that the container
+            // disposed the provider.
+            clock.PendingTimerCount.Should().Be(1, "the live file provider holds its flush-interval timer");
 
             provider.Dispose();
 
-            // A disposed provider drops what it is handed, so a write that never lands is the
-            // observable proof that the container disposed it. An undisposed provider's flush
-            // thread would pick this up well inside the window below.
-            logger.LogInformation("after-disposal");
-
-            (await ReadLogWithinAsync(tempDir, TimeSpan.FromSeconds(1)))
-                .Should().NotContain("after-disposal", "the container must have disposed the file provider");
+            clock.PendingTimerCount.Should().Be(0, "the container must have disposed the file provider");
         }
         finally
         {
             if (Directory.Exists(tempDir))
                 Directory.Delete(tempDir, recursive: true);
         }
-    }
-
-    private static async Task<string> ReadLogWithinAsync(string directory, TimeSpan window)
-    {
-        var deadline = DateTime.UtcNow + window;
-
-        while (DateTime.UtcNow < deadline)
-        {
-            var content = ReadLog(directory);
-            if (content.Contains("after-disposal", StringComparison.Ordinal))
-                return content;
-
-            await Task.Delay(50);
-        }
-
-        return ReadLog(directory);
-    }
-
-    private static string ReadLog(string directory)
-    {
-        if (!Directory.Exists(directory))
-            return string.Empty;
-
-        return string.Concat(Directory.GetFiles(directory, "app-*.log").Select(ReadSharedText));
-    }
-
-    // The provider keeps its writer open, so the file has to be read without demanding exclusivity.
-    private static string ReadSharedText(string path)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-
-        return reader.ReadToEnd();
     }
 
     [Fact]

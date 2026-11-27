@@ -169,6 +169,7 @@ internal sealed class IdempotencyTestHost : IAsyncDisposable
         endpoints.MapPost("/orders/optional", CreateAsync)
             .WithMetadata(new IdempotentAttribute(requireKey: false));
         endpoints.MapPost("/open", CreateAsync);
+        endpoints.MapPost("/secrets", CreateAsync).RequireIdempotency().WithSensitiveResponse();
         endpoints.MapGet("/orders", CreateAsync).RequireIdempotency();
     }
 

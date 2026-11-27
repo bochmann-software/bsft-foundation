@@ -27,10 +27,15 @@ internal sealed class RequestMetadata : IRequestMetadata
         // it out, and a descriptor that disagreed with the behaviors would be a second answer to
         // the same question.
         _attributes = Attribute.GetCustomAttributes(requestType, inherit: true);
+        IsCommand = Array.Exists(requestType.GetInterfaces(), static contract =>
+            contract.IsGenericType && contract.GetGenericTypeDefinition() == typeof(ICommand<>));
     }
 
     /// <inheritdoc />
     public Type RequestType { get; }
+
+    /// <inheritdoc />
+    public bool IsCommand { get; }
 
     /// <inheritdoc />
     public TAttribute? FindAttribute<TAttribute>() where TAttribute : Attribute

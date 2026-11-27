@@ -25,6 +25,7 @@ public sealed class FilterOperatorJsonConverterTests
     [InlineData(FilterOperator.EndsWith, "endsWith")]
     [InlineData(FilterOperator.NotEndsWith, "!endsWith")]
     [InlineData(FilterOperator.Present, "pr")]
+    [InlineData(FilterOperator.In, "in")]
     public void Every_operator_is_written_and_read_back_under_its_wire_name(
         FilterOperator op, string wireName)
     {
@@ -54,4 +55,53 @@ public sealed class FilterOperatorJsonConverterTests
     [Fact]
     public void An_operator_outside_the_table_is_written_as_its_own_name()
         => JsonSerializer.Serialize((FilterOperator)99).Should().Be("\"99\"");
+
+    [Fact]
+    public void The_numeric_values_of_operators_before_In_are_unchanged()
+    {
+        // The In operator is declared last so existing numeric values remain unchanged.
+        // This test ensures backward compatibility when serializing/storing numeric operator values.
+        ((int)FilterOperator.Eq).Should().Be(0);
+        ((int)FilterOperator.Neq).Should().Be(1);
+        ((int)FilterOperator.Gt).Should().Be(2);
+        ((int)FilterOperator.Gte).Should().Be(3);
+        ((int)FilterOperator.Lt).Should().Be(4);
+        ((int)FilterOperator.Lte).Should().Be(5);
+        ((int)FilterOperator.Contains).Should().Be(6);
+        ((int)FilterOperator.NotContains).Should().Be(7);
+        ((int)FilterOperator.StartsWith).Should().Be(8);
+        ((int)FilterOperator.NotStartsWith).Should().Be(9);
+        ((int)FilterOperator.EndsWith).Should().Be(10);
+        ((int)FilterOperator.NotEndsWith).Should().Be(11);
+        ((int)FilterOperator.Present).Should().Be(12);
+        ((int)FilterOperator.In).Should().Be(13);
+    }
+
+    [Fact]
+    public void ComparisonNode_WithInOperator_DeserializesCorrectly()
+    {
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        var json = """
+        {
+            "$type": "comparison",
+            "field": "status",
+            "op": "in",
+            "value": ["a", "b"]
+        }
+        """;
+
+        var node = JsonSerializer.Deserialize<FilterNode>(json, options);
+
+        node.Should().NotBeNull();
+        node.Should().BeOfType<ComparisonNode>();
+        var comparisonNode = (ComparisonNode)node!;
+        comparisonNode.Field.Should().Be("status");
+        comparisonNode.Op.Should().Be(FilterOperator.In);
+        comparisonNode.Value.ValueKind.Should().Be(JsonValueKind.Array);
+        comparisonNode.Value.GetArrayLength().Should().Be(2);
+
+        var elements = comparisonNode.Value.EnumerateArray().ToList();
+        elements[0].GetString().Should().Be("a");
+        elements[1].GetString().Should().Be("b");
+    }
 }

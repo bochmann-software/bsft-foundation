@@ -2,6 +2,7 @@ using Bsft.Retention.DependencyInjection;
 using Bsft.Retention.Tests.Fakes;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -28,9 +29,7 @@ public sealed class RetentionRegistrationTests
 
         services.Should().ContainSingle(sd =>
             sd.ServiceType == typeof(RecordingRetentionPass) && sd.Lifetime == ServiceLifetime.Scoped);
-        services.Should().ContainSingle(sd =>
-            sd.ServiceType == typeof(IHostedService)
-            && sd.ImplementationType == typeof(RetentionSweeper<RecordingRetentionPass>));
+        services.HasBsftGatedHostedService<RetentionSweeper<RecordingRetentionPass>>().Should().BeTrue();
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using Bsft.Core.Polling;
+using Bsft.Core.Tenancy;
 using Bsft.Outbox;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -33,8 +34,10 @@ namespace Bsft.Messaging.Outbox;
 /// </remarks>
 public sealed class OutboxDispatcher : BackgroundService, IPollReporter, IOutboxProcessor
 {
+    private readonly IBackgroundTenantSource? _tenants;
     private readonly IOutboxDrainer<IntegrationEventMessage> _drainer;
     private readonly TimeSpan _pollInterval;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<OutboxDispatcher> _logger;
 
     /// <summary>
@@ -42,6 +45,7 @@ public sealed class OutboxDispatcher : BackgroundService, IPollReporter, IOutbox
     /// </summary>
     /// <param name="drainer">The drain pass over this package's outbox.</param>
     /// <param name="options">The messaging options carrying the outbox group.</param>
+    /// <param name="timeProvider">The clock the wait between passes runs on.</param>
     /// <param name="logger">Logger used to report failed passes.</param>
     /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     /// <remarks>
@@ -52,13 +56,38 @@ public sealed class OutboxDispatcher : BackgroundService, IPollReporter, IOutbox
     public OutboxDispatcher(
         IOutboxDrainer<IntegrationEventMessage> drainer,
         IOptions<BsftMessagingOptions> options,
+        TimeProvider timeProvider,
         ILogger<OutboxDispatcher> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         _drainer = drainer ?? throw new ArgumentNullException(nameof(drainer));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _pollInterval = options.Value.Outbox.PollInterval;
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="OutboxDispatcher"/> class that runs each pass once per tenant
+    /// of <paramref name="tenants"/>, with <see cref="BackgroundTenant.Current"/> set, so that every scope a pass opens
+    /// resolves that tenant. The container picks this constructor when an <see cref="IBackgroundTenantSource"/> is
+    /// registered.
+    /// </summary>
+    /// <param name="drainer">As for the constructor without the tenant source.</param>
+    /// <param name="options">As for the constructor without the tenant source.</param>
+    /// <param name="timeProvider">As for the constructor without the tenant source.</param>
+    /// <param name="logger">As for the constructor without the tenant source.</param>
+    /// <param name="tenants">The tenants the passes run for.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    public OutboxDispatcher(
+        IOutboxDrainer<IntegrationEventMessage> drainer,
+        IOptions<BsftMessagingOptions> options,
+        TimeProvider timeProvider,
+        ILogger<OutboxDispatcher> logger,
+        IBackgroundTenantSource tenants)
+        : this(drainer, options, timeProvider, logger)
+    {
+        _tenants = tenants ?? throw new ArgumentNullException(nameof(tenants));
     }
 
     /// <inheritdoc />
@@ -68,7 +97,7 @@ public sealed class OutboxDispatcher : BackgroundService, IPollReporter, IOutbox
     /// <param name="stoppingToken">The token that stops the loop when cancelled.</param>
     /// <returns>A task that completes when the loop has unwound.</returns>
     internal Task RunLoopAsync(CancellationToken stoppingToken = default) =>
-        new PollLoop(DrainAsync, this, _pollInterval).RunAsync(stoppingToken);
+        new PollLoop(DrainAsync, this, _pollInterval, _timeProvider).RunAsync(stoppingToken);
 
     /// <summary>
     /// One pass of the loop. A full batch means more work is waiting, so the dispatcher only backs
@@ -91,5 +120,11 @@ public sealed class OutboxDispatcher : BackgroundService, IPollReporter, IOutbox
     void IPollReporter.ReportStopping() => _logger.LogDebug("Outbox dispatcher stopping.");
 
     /// <inheritdoc />
-    public Task<int> ProcessOnceAsync(CancellationToken cancellationToken = default) => _drainer.DrainOnceAsync(cancellationToken);
+    /// <remarks>
+    /// With a tenant source the pass drains every tenant's outbox in turn, with
+    /// <see cref="BackgroundTenant.Current"/> set, and returns the total. That holds for the poll and for a wake-up
+    /// alike, so a notification listener calling this drains the tenants too.
+    /// </remarks>
+    public Task<int> ProcessOnceAsync(CancellationToken cancellationToken = default) =>
+        BackgroundTenantPasses.CountPerTenantAsync(_tenants, _drainer.DrainOnceAsync, cancellationToken);
 }

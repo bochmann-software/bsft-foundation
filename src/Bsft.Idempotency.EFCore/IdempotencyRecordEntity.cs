@@ -11,8 +11,17 @@ namespace Bsft.Idempotency.EFCore;
 /// </remarks>
 public sealed class IdempotencyRecordEntity
 {
-    /// <summary>Auto-increment primary key.</summary>
+    /// <summary>
+    /// The primary key: auto-increment, or, under <c>UseTenantKeys</c>, a time-ordered id the client
+    /// creates, keyed together with <see cref="TenantId"/>.
+    /// </summary>
     public long Id { get; set; }
+
+    /// <summary>
+    /// The tenant the key was claimed in. Mapped only under <c>UseTenantKeys</c>, where it is required
+    /// and leads the key and the unique index; without it the table has no such column.
+    /// </summary>
+    public string? TenantId { get; set; }
 
     /// <summary>
     /// Which caller the key belongs to: the digest of tenant, subject and client id. It is the

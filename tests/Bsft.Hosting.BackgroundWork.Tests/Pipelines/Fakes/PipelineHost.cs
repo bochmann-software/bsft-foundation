@@ -1,5 +1,7 @@
 using Bsft.Hosting.BackgroundWork.Pipelines;
+using Bsft.Core.Hosting;
 using Bsft.Hosting.BackgroundWork.DependencyInjection;
+using Bsft.Hosting.StartGates.DependencyInjection;
 using Bsft.Tests.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -17,9 +19,13 @@ internal sealed class PipelineHost : IDisposable
 
     private readonly ServiceProvider _provider;
 
-    public PipelineHost(Action<BsftBoundedPipelineOptions>? configure = null, bool withEnrichment = false)
+    public PipelineHost(
+        Action<BsftBoundedPipelineOptions>? configure = null, bool withEnrichment = false, IHostedWorkStartGate? gate = null)
     {
         var services = new ServiceCollection();
+        if (gate is not null)
+            services.AddBsftHostedWorkStartGate(_ => gate);
+
         services.AddSingleton<ILogger<BatchingWriterWorker<SampleItem>>>(Writer);
         services.AddSingleton<ILogger<EnrichmentStageWorker<SampleItem>>>(Stage);
         services.AddSingleton<IBatchCommitter<SampleItem>>(Committer);

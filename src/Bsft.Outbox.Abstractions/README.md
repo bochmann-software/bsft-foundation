@@ -36,6 +36,9 @@ it once, generically). `IOutboxSideEffect<TPayload>` (what a row means — publi
 it; a host writes one per outbox). `IOutboxRetrySchedule` (how long a failed row waits;
 `Bsft.Outbox` ships an exponential one that honours a wait the failure asked for). `IOutboxRow` (the
 lifecycle a stored row exposes to the lease protocol, implemented by the entity that holds it).
+`IOutboxWakeSignal` (tells the hosted drain worker of `Bsft.Outbox` that an outbox has work, so it
+drains before its poll interval elapses; a hint, never the guarantee. Register one as a keyed service
+under the outbox's name; `Bsft.Outbox.Postgres` implements it on PostgreSQL `LISTEN`).
 
 ## Documentation
 

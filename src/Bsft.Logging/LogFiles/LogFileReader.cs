@@ -22,7 +22,7 @@ public sealed class LogFileReader : ILogFileReader
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="options"/> is null.</exception>
     public LogFileReader(
         BsftLoggingOptions options,
-        TimeProvider? timeProvider = null,
+        TimeProvider timeProvider,
         ILogFileAccess? fileAccess = null)
         : this(options, timeProvider, fileAccess ?? new LogFileAccess(), new LogFileNaming())
     {
@@ -31,7 +31,7 @@ public sealed class LogFileReader : ILogFileReader
     /// <summary>Initializes the DI-owned reader with its replaceable file access and shared naming service.</summary>
     internal LogFileReader(
         BsftLoggingOptions options,
-        TimeProvider? timeProvider,
+        TimeProvider timeProvider,
         ILogFileAccess fileAccess,
         ILogFileNaming fileNaming)
     {
@@ -41,7 +41,7 @@ public sealed class LogFileReader : ILogFileReader
         _directory = Path.GetFullPath(options.LogDirectory);
         _pollInterval = options.LogReaderPollInterval;
         _maximumEntryBytes = options.MaxEntryBytes;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _files = fileAccess ?? throw new ArgumentNullException(nameof(fileAccess));
         _fileNaming = fileNaming ?? throw new ArgumentNullException(nameof(fileNaming));
     }

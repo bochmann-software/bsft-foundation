@@ -22,6 +22,12 @@ public sealed class BsftLoggingOptions
     /// </summary>
     private const int MaxRetainDaysLimit = 3650;
 
+    private const int DefaultMaxFileSizeMb = 10;
+    private const int DefaultMaxEntryBytes = 1024 * 1024;
+    private const int DefaultRetainDays = 30;
+    private const int DefaultMaxScopePropertyChars = 1024;
+    private const int DefaultPollIntervalMs = 250;
+
     /// <summary>
     /// Whether to write logs to files. Default: true.
     /// </summary>
@@ -36,18 +42,42 @@ public sealed class BsftLoggingOptions
     /// <summary>
     /// Maximum size per log file in MB before rolling to a new file. Default: 10.
     /// </summary>
-    public int MaxFileSizeMb { get; set; } = 10;
+    public int MaxFileSizeMb { get; set; } = DefaultMaxFileSizeMb;
 
     /// <summary>
     /// Maximum UTF-8 bytes retained for one physical line or multiline entry while reading.
     /// Default: 1 MiB.
     /// </summary>
-    public int MaxEntryBytes { get; set; } = 1024 * 1024;
+    public int MaxEntryBytes { get; set; } = DefaultMaxEntryBytes;
 
     /// <summary>
-    /// Number of days to retain log files. Older files are deleted on startup. Default: 30.
+    /// Number of days to retain log files. Older files are deleted on startup and on each day rollover. Default: 30.
     /// </summary>
-    public int RetainDays { get; set; } = 30;
+    public int RetainDays { get; set; } = DefaultRetainDays;
+
+    /// <summary>
+    /// Maximum number of log files kept, the one being written included. When more exist, the oldest are
+    /// deleted at start-up and on every roll-over. <see langword="null"/> or 0 keeps every file. Default: unlimited.
+    /// </summary>
+    /// <remarks>
+    /// Assumes one writer per log directory, see <see cref="MaxTotalSizeMb"/>.
+    /// </remarks>
+    public int? MaxRetainedFiles { get; set; }
+
+    /// <summary>
+    /// Maximum combined size of all log files in MB, the one being written included. When it is exceeded the
+    /// oldest files are deleted at start-up and on every roll-over; the file being written is never deleted.
+    /// <see langword="null"/> or 0 sets no size limit. When set it must be at least twice
+    /// <see cref="MaxFileSizeMb"/>: a rolled file is at least that large, so the limit keeps roughly
+    /// <c>MaxTotalSizeMb / MaxFileSizeMb - 1</c> full rolled files besides the one being written.
+    /// Default: unlimited.
+    /// </summary>
+    /// <remarks>
+    /// This limit and <see cref="MaxRetainedFiles"/> assume one writer per log directory: a provider that
+    /// deletes a file another provider or process is still appending to loses that data without an error on
+    /// Linux. Hosts that share a directory should rely on <see cref="RetainDays"/> alone.
+    /// </remarks>
+    public int? MaxTotalSizeMb { get; set; }
 
     /// <summary>
     /// When true, uses JSON output format (one JSON object per line). Default: false (structured text lines).
@@ -67,7 +97,7 @@ public sealed class BsftLoggingOptions
     /// the correlation id excepted. Beyond it the last value is cut and the remaining properties are left out.
     /// Defaults to 1024.
     /// </summary>
-    public int MaxScopePropertyChars { get; set; } = 1024;
+    public int MaxScopePropertyChars { get; set; } = DefaultMaxScopePropertyChars;
 
     /// <summary>
     /// Minimum log level for the file logger. Default: <see cref="LogLevel.Information"/>.
@@ -81,7 +111,7 @@ public sealed class BsftLoggingOptions
     public LogLevel MinimumLevel { get; set; } = LogLevel.Information;
 
     /// <summary>How often a live log-file tail checks for newly appended entries.</summary>
-    public TimeSpan LogReaderPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
+    public TimeSpan LogReaderPollInterval { get; set; } = TimeSpan.FromMilliseconds(DefaultPollIntervalMs);
 
     /// <summary>Throws when a configured value cannot be used, naming the member and the value.</summary>
     /// <exception cref="InvalidOperationException">Thrown when a configured value cannot be used.</exception>
@@ -131,6 +161,27 @@ public sealed class BsftLoggingOptions
                 nameof(RetainDays),
                 FormattableString.Invariant($"must be between 1 and {MaxRetainDaysLimit} days"),
                 RetainDays);
+        }
+
+        ValidateFileLimits();
+    }
+
+    /// <summary>Throws when the file-count or total-size limit is negative or leaves no room for one file.</summary>
+    /// <exception cref="InvalidOperationException">Thrown when a limit cannot be used.</exception>
+    private void ValidateFileLimits()
+    {
+        if (MaxRetainedFiles < 0)
+            throw Invalid(nameof(MaxRetainedFiles), "must not be negative", MaxRetainedFiles.Value);
+
+        if (MaxTotalSizeMb < 0)
+            throw Invalid(nameof(MaxTotalSizeMb), "must not be negative", MaxTotalSizeMb.Value);
+
+        if (MaxTotalSizeMb is > 0 && MaxTotalSizeMb < 2 * MaxFileSizeMb)
+        {
+            throw Invalid(
+                nameof(MaxTotalSizeMb),
+                FormattableString.Invariant($"must be at least twice {nameof(MaxFileSizeMb)} ({2 * MaxFileSizeMb} MB), one rolled file plus the one being written, or the rolled file is deleted at once; 0 means no limit"),
+                MaxTotalSizeMb.Value);
         }
     }
 

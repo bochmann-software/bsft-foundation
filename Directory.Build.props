@@ -10,7 +10,7 @@
        on that version as a minimum. From 2.2.0 on it carries the same version as BsftVersion
        (docs/releasing.md, "Two version lines"). -->
   <PropertyGroup>
-    <BsftFoundationVersion>2.2.0.1</BsftFoundationVersion>
+    <BsftFoundationVersion>2.3.0</BsftFoundationVersion>
   </PropertyGroup>
 
   <!-- The target frameworks follow the tier (docs/package-conventions.md, "Tiers: Foundation and
@@ -118,6 +118,10 @@
     <IsTestProject>true</IsTestProject>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Allocation tests measure a Release build without the coverage collector, so every default
+         test run leaves them out; the allocation job of ci.yml runs them with an explicit filter,
+         which overrides this one (spec-bsft-templating.md 11.2). -->
+    <VSTestTestCaseFilter Condition="'$(VSTestTestCaseFilter)' == ''">Category!=Allocation</VSTestTestCaseFilter>
   </PropertyGroup>
 
   <ItemGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
